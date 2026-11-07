@@ -93,9 +93,13 @@ export function VerifyCard({ verify, docTitles }: { verify: AnalysisResult["veri
           const contradicted = c.verdict === "contradicted";
           // Claim-level quote for a supported claim that Verify left without an
           // evidence quote: the top `use` passage of the claim-level Rerank
-          // lookup, shown as a quote but labeled as what it is.
+          // lookup, shown as a quote but labeled as what it is. Never used when
+          // the evidence was withheld for failing the reference check.
           const closestUse =
-            !c.evidence && c.verdict !== "not_stated" && c.verdict !== "not_a_claim"
+            !c.evidence &&
+            !c.evidenceWithheld &&
+            c.verdict !== "not_stated" &&
+            c.verdict !== "not_a_claim"
               ? c.closest?.find((r) => r.action === "use" && r.passage)
               : undefined;
           const otherClosest = closestUse
@@ -178,6 +182,12 @@ export function VerifyCard({ verify, docTitles }: { verify: AnalysisResult["veri
                     confidence {formatProb(c.evidence.confidence)}
                   </footer>
                 </blockquote>
+              ) : c.evidenceWithheld ? (
+                <p className="mt-2 rounded-md border border-dashed border-amber-400 bg-amber-50/60 px-3 py-2 text-xs leading-relaxed text-amber-900">
+                  Evidence withheld — Verify returned an evidence reference for this claim that
+                  does not match the submitted documents ({c.evidenceWithheld}); it is not shown
+                  as evidence. The review state fails closed on this.
+                </p>
               ) : closestUse && closestUse.passage ? (
                 <blockquote className="mt-2 border-l-2 border-teal-300 bg-teal-50/50 pl-3 text-sm leading-relaxed text-foreground/85">
                   <p className="mb-1 text-[11px] font-medium text-teal-900">

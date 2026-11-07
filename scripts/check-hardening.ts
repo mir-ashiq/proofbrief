@@ -260,10 +260,28 @@ const orphanResult: JoinedRerankResult = {
 };
 check("unknown id with out-of-range index joins to nothing", orphanResult.passage === undefined);
 const orphanTriage = computeTriage(okInputs({ rerankResults: [orphanResult] }));
+// Strengthened with the reference-integrity gate (see check-source-integrity.ts):
+// a "use" result that cannot be joined is a response-integrity failure, not a
+// content finding, so it fails closed as review_required — still never ready.
 check(
-  "a use result that joins to no passage => missing_evidence, never ready",
-  orphanTriage.state === "missing_evidence",
+  "a use result that joins to no passage => review_required (fail closed), never ready",
+  orphanTriage.state === "review_required",
   orphanTriage.state,
+);
+check(
+  "reason names the unjoined result",
+  orphanTriage.reasons.some((r) => r.includes("did not join back to any passage")),
+  orphanTriage.reasons,
+);
+const noUseTriage = computeTriage(
+  okInputs({
+    rerankResults: [{ index: 0, action: "skip", relevance_score: 0.2, document_score: 0.3, passage: registry[0] }],
+  }),
+);
+check(
+  "no use results at all (legitimate) still => missing_evidence",
+  noUseTriage.state === "missing_evidence",
+  noUseTriage.state,
 );
 
 console.log("5) Export — expanded sections label offsets as the raw extraction's");

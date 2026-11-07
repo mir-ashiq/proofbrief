@@ -216,6 +216,27 @@ Verified by `bun scripts/check-time-budget.ts` (30 new offline checks: mocked de
 
 ---
 
+## Run 7 — 2026-11-07, ~10:55 PM IST (17:25 UTC) — reference-integrity hardening (offline round)
+
+### What changed (source-reference integrity)
+
+Every reference an endpoint makes is now checked against the documents that were actually submitted to it, and anything that does not resolve inside the submission is withheld and fails the review state closed:
+
+- **Rerank join** (`src/lib/registry.ts`): a nonempty result id is authoritative — an unknown id joins to nothing instead of silently falling back to the index, which would have attributed the result to a *different* passage and displayed it as the source basis. The index is used only when the id is absent, as the API contract permits ("join them back … by index or id"), and only within the passages that were sent.
+- **Verify evidence** (`src/lib/integrity.ts`, new): evidence must cite a submitted document at offsets inside that document's text. A claim with an invalid reference keeps the endpoint's verdict and scores but loses the evidence (`evidenceWithheld` names what was wrong); the UI and the Markdown packet say the evidence was withheld, and a Rerank relevance match is never dressed up in its place.
+- **Compare pairs and findings**: a pair between documents that were not both submitted is dropped whole; a finding whose side does not cite its own side's document (a ghost id, the other side's id, or out-of-bounds offsets) is dropped from its pair. Dropping shifts pair positions, so the endpoint's conflict indexes are remapped in the same pass — no stale `#compare-pair-N` anchors.
+- **Triage** (`src/lib/analysis.ts`): any integrity failure — including a Rerank `use` result that joins to no passage (previously classified `missing_evidence`) — maps to `review_required` with reasons that say this is a response-integrity check, not a verdict and not a source conflict. Invalid references can never appear as trustworthy evidence and never allow `ready_for_review`. Retryable transport failures still map to `analysis_incomplete` (a retry may return clean references), and a genuine conflict between submitted documents still maps to `conflict_needs_decision`.
+
+The time budget, relevance gate, Zod shape validation, idempotency keys, 429 handling, concurrency guard, five cases, and both exports are unchanged.
+
+### Observed outcomes
+
+No live run in this round (the patch was verified offline; deployment pending at the time of writing). Instead, all five saved live results (`tool-results/run6-*.json`) were replayed through the new composition — strict re-join of the Rerank results, reference check of every evidence item, pair, and finding, recomputed triage — and reproduce their documented states exactly with zero integrity issues: `supported` → ready_for_review, `conflict` → conflict_needs_decision, `missing` → missing_evidence, `scope-trap` → ready_for_review, `wrong-question` → review_required. Real endpoint output does not trip the new gates.
+
+Verified by `bun scripts/check-source-integrity.ts` (55 offline checks: unknown rerank id with a valid index never joins elsewhere; unjoinable `use` results fail closed; withheld evidence and dropped pairs/findings never allow ready; conflict-index remap; export mirroring; transport-failure precedence; the five-run replay above), the four existing offline suites (still green, with check-hardening §4 updated to the strengthened `review_required` semantics), a clean `bunx tsc --noEmit`, clean `eslint .`, and a production build with type checking. No endpoint result was altered, cached, or fabricated.
+
+---
+
 ## Run metadata template
 
 ```

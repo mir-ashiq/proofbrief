@@ -99,10 +99,16 @@ export interface OpposingEvidence {
  * claims that are not established or carry no evidence quote, and the opposing
  * passage of a flagged pair (Compare) for contradicted claims. Both are
  * display-only; neither replaces a Verify verdict or changes the review state.
+ *
+ * `evidenceWithheld` is set when Verify's evidence reference did not match the
+ * submitted documents (unknown document id or out-of-range offsets, checked
+ * in src/lib/integrity.ts): the evidence is removed so it can never render as
+ * evidence, and the review state fails closed. The reason names what was wrong.
  */
 export interface EnrichedClaim extends VerifyClaim {
   closest?: JoinedRerankResult[];
   opposing?: OpposingEvidence;
+  evidenceWithheld?: string;
 }
 
 export interface TriageStateInfo {
@@ -151,8 +157,13 @@ export interface AnalysisResult {
  * - A retryable endpoint failure (429 / 5xx / network / run-budget expiry)
  *   => analysis_incomplete: fail closed, labeled "retry later", clearly NOT a
  *   source conflict.
- * - Any other endpoint error, invalid response, no usable Rerank passage, or
- *   a missing answers_question score => review_required (fail closed).
+ * - Any other endpoint error, invalid response, a missing answers_question
+ *   score, or a response-integrity failure — a reference that does not resolve
+ *   inside the submitted documents (unknown Rerank passage id, Verify evidence
+ *   citing an unknown document or out-of-range offsets, Compare pairs/findings
+ *   doing the same) => review_required (fail closed).
+ * - Integrity failures never appear as evidence and never allow "ready"; they
+ *   are a check of the response, not a verdict on the draft.
  * - A Compare pair flagged conflicting, or a Verify claim contradicted,
  *   => conflict_needs_decision (approval is blocked).
  * - Verify's answers_question below threshold => review_required: the claims
@@ -194,8 +205,29 @@ export function computeTriage(input: {
   compareError?: { code: string; message: string };
   pairs: ComparePair[];
   conflictIndexes: number[];
+  /**
+   * Response-integrity failures found while checking endpoint references
+   * against the submitted documents (see src/lib/integrity.ts). Any entry
+   * fails the review closed. Rerank "use" results that do not join back to a
+   * submitted passage are detected here and added to this list.
+   */
+  integrityIssues?: string[];
 }): TriageStateInfo {
   const reasons: string[] = [];
+
+  // Response integrity, collected up front so it can also accompany a
+  // non-retryable endpoint failure below: a "use" result that joins to no
+  // passage means Rerank referenced a passage we never sent (unknown id, or
+  // no id and an out-of-range index — see joinResultToPassage). It must not
+  // count as a source basis, so it fails closed like any other bad reference.
+  const integrity = [...(input.integrityIssues ?? [])];
+  const useResults = input.rerankResults.filter((r) => r.action === "use");
+  const unjoinedUse = useResults.filter((r) => !r.passage);
+  if (unjoinedUse.length > 0) {
+    integrity.push(
+      `${unjoinedUse.length} Rerank "use" result${unjoinedUse.length > 1 ? "s" : ""} did not join back to any passage of the submitted documents (unknown id or out-of-range index); ${unjoinedUse.length > 1 ? "they" : "it"} cannot be shown as the source basis.`,
+    );
+  }
 
   const errors: [boolean, { code: string; message: string } | undefined, string][] = [
     [input.rerankOk, input.rerankError, "Rerank"],
@@ -224,15 +256,27 @@ export function computeTriage(input: {
         ],
       };
     }
-    return { state: "review_required", reasons: endpointErrors };
+    return { state: "review_required", reasons: [...endpointErrors, ...integrity] };
   }
 
-  // A `use` result only counts as a usable passage when it actually joins
-  // back to a registry passage (by id, falling back to index). A result that
-  // references an unknown passage id or an out-of-range index cannot be
-  // shown to a reviewer, so it must not count as a source basis.
-  const useCount = input.rerankResults.filter((r) => r.action === "use" && r.passage).length;
-  const noUsablePassage = useCount === 0;
+  // A reference that does not resolve inside the submitted documents is an
+  // integrity failure, not a content finding: it must never appear as
+  // trustworthy evidence and never allow a ready state. This is a check of
+  // the response — not a verdict on the draft, and not a source conflict.
+  if (integrity.length > 0) {
+    return {
+      state: "review_required",
+      reasons: [
+        ...integrity,
+        "Failing closed: an output that references documents or offsets outside this submission cannot be trusted as evidence, so the draft cannot be cleared automatically. This is a response-integrity check, not a verdict on the draft and not a source conflict.",
+      ],
+    };
+  }
+
+  // Every "use" result joined back to a registry passage (the integrity gate
+  // above returned early otherwise), so reaching here with zero of them means
+  // Rerank itself marked no passage as usable for this question.
+  const noUsablePassage = useResults.length === 0;
   if (noUsablePassage) {
     reasons.push("Rerank marked no passage as usable for this question, so there is no source basis to check the draft against.");
   }

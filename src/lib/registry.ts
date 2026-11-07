@@ -68,15 +68,27 @@ export function toRerankDocuments(registry: PassageEntry[]) {
   }));
 }
 
-/** Join a Rerank result back to its registry entry by id, falling back to index. */
+/**
+ * Join a Rerank result back to its registry entry, strictly.
+ *
+ * The API documents joining results back "by index or id", so:
+ * - a nonempty id is authoritative: it must resolve to a passage that was
+ *   actually sent. An id we do not recognize fails closed (undefined) — it is
+ *   NEVER repaired by falling back to the index, which would attribute the
+ *   result to a different, unrelated passage and dress it up as evidence;
+ * - only when the id is absent is the index used, as the contract permits,
+ *   bounded to the passages that were sent (out of range => undefined).
+ *
+ * Callers treat an unjoined "use" result as a response-integrity failure
+ * (review_required), never as a source basis.
+ */
 export function joinResultToPassage(
   result: { id?: string; index: number },
   registry: PassageEntry[],
   sentOrder: PassageEntry[],
 ): PassageEntry | undefined {
   if (result.id) {
-    const byId = registry.find((p) => p.id === result.id);
-    if (byId) return byId;
+    return registry.find((p) => p.id === result.id);
   }
   return sentOrder[result.index];
 }

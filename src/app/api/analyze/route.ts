@@ -23,6 +23,12 @@
 //                 (enum allowlists, 0–1 scores, integer offsets). Anything
 //                 unexpected fails closed: the endpoint counts as not-ok and
 //                 the review state can never be "ready" from that output.
+//   4b. Integrity — every reference is checked against the documents that
+//                 were actually submitted (Rerank passage joins, Verify
+//                 evidence document ids and offsets, Compare pair and finding
+//                 references). A reference that does not resolve inside the
+//                 submission is withheld — never shown as evidence — and
+//                 fails the review state closed (src/lib/integrity.ts).
 //   5. Rerank × — follow-up lookups with the claim as query, for claims that
 //                  are not established or that returned no evidence quote.
 //                  Display-only enrichment: it never changes the review state.
@@ -46,6 +52,7 @@ import {
   validateCompareResponse,
   type ValidationResult,
 } from "@/lib/validate";
+import { sanitizeVerifyClaims, sanitizeCompare } from "@/lib/integrity";
 import {
   computeTriage,
   findOpposingEvidence,
@@ -307,20 +314,39 @@ async function runAnalysis(demoCase: NonNullable<ReturnType<typeof getCase>>): P
   const verifyResponse = verifyOutcome.data;
   const compareResponse = compareOutcome.data;
 
-  // Join Rerank results back to the registry by id (fallback: index).
+  // Join Rerank results back to the registry strictly: a nonempty id must
+  // resolve to a passage that was sent (an unknown id never falls back to the
+  // index — that would attribute the result to a different passage); only an
+  // absent id is joined by index, as the API contract permits.
   const joinedResults: JoinedRerankResult[] = (rerankResponse?.results ?? []).map((r) => ({
     ...r,
     passage: joinResultToPassage(r, registry, sentOrder),
   }));
 
-  const conflictIndexes = (compareResponse?.conflicts ?? []).filter(
-    (i) => Number.isInteger(i) && i >= 0 && i < (compareResponse?.pairs.length ?? 0),
+  // ---- Stage 4b: reference integrity against the submitted documents ----
+  // Verify evidence and Compare pairs/findings must cite the submitted
+  // documents, within their bounds. Invalid references are withheld (never
+  // displayed as evidence) and become integrity issues, which fail the review
+  // state closed. Dropping pairs shifts their positions, so the endpoint's
+  // conflict indexes are remapped in the same pass.
+  const docMap = Object.fromEntries(
+    demoCase.docs.map((d) => [d.id, { title: d.title, text: d.text }]),
   );
+  const { claims: verifiedClaims, issues: verifyIssues } = sanitizeVerifyClaims(
+    verifyResponse?.claims ?? [],
+    docMap,
+  );
+  const compareSanitized = sanitizeCompare(
+    compareResponse?.pairs ?? [],
+    compareResponse?.conflicts ?? [],
+    docMap,
+  );
+  const conflictIndexes = compareSanitized.conflictIndexes;
   // Also catch pairs whose relation is conflicting even if not listed in the index array.
   const allConflictIndexes = Array.from(
     new Set([
       ...conflictIndexes,
-      ...(compareResponse?.pairs ?? [])
+      ...compareSanitized.pairs
         .map((p, i) => (p.relation === "conflicting" ? i : -1))
         .filter((i) => i >= 0),
     ]),
@@ -331,14 +357,16 @@ async function runAnalysis(demoCase: NonNullable<ReturnType<typeof getCase>>): P
   // returned no evidence quote (e.g. supported without a passage), so a claim
   // is never left with nothing to look at. It never replaces a Verify verdict
   // and never changes the review state.
-  const rawClaims = verifyResponse?.claims ?? [];
-  const lookupTargets = rawClaims
+  // Reference-checked Verify claims (evidence that did not match the
+  // submitted documents is already withheld here, so such a claim counts as
+  // "no evidence quote" for the lookup targeting below).
+  const lookupTargets = verifiedClaims
     .map((c, i) => ({ claim: c.claim, index: i, verdict: c.verdict }))
     .filter(
       ({ index, verdict }) =>
-        rawClaims[index].counted !== false &&
+        verifiedClaims[index].counted !== false &&
         verdict !== "not_a_claim" &&
-        (verdict === "not_stated" || !rawClaims[index].evidence),
+        (verdict === "not_stated" || !verifiedClaims[index].evidence),
     )
     .slice(0, MAX_CLOSEST_LOOKUPS);
 
@@ -410,15 +438,12 @@ async function runAnalysis(demoCase: NonNullable<ReturnType<typeof getCase>>): P
   // Which side of a flagged pair opposes the claim is decided by wording
   // (claim text vs. each side's passages), so the join cannot flip when Verify
   // happens to cite either passage as evidence. Display-only.
-  const docMap = Object.fromEntries(
-    demoCase.docs.map((d) => [d.id, { title: d.title, text: d.text }]),
-  );
-  const enrichedClaims: EnrichedClaim[] = rawClaims.map((c, i) => ({
+  const enrichedClaims: EnrichedClaim[] = verifiedClaims.map((c, i) => ({
     ...c,
     closest: closestByIndex.get(i),
     opposing:
       verifyOk && compareOk
-        ? findOpposingEvidence(c, compareResponse?.pairs ?? [], allConflictIndexes, docMap)
+        ? findOpposingEvidence(c, compareSanitized.pairs, allConflictIndexes, docMap)
         : undefined,
   }));
 
@@ -434,8 +459,11 @@ async function runAnalysis(demoCase: NonNullable<ReturnType<typeof getCase>>): P
     answersQuestion: verifyResponse?.answers_question,
     compareOk,
     compareError: compareOutcome.error,
-    pairs: compareResponse?.pairs ?? [],
+    pairs: compareSanitized.pairs,
     conflictIndexes: allConflictIndexes,
+    // Reference-integrity failures: withheld Verify evidence and Compare
+    // pairs/findings (Rerank joins are detected inside computeTriage).
+    integrityIssues: [...verifyIssues, ...compareSanitized.issues],
   });
 
   const result: AnalysisResult = {
@@ -463,7 +491,7 @@ async function runAnalysis(demoCase: NonNullable<ReturnType<typeof getCase>>): P
       error: compareOutcome.error,
       model: compareResponse?.model,
       verdict: compareResponse?.verdict,
-      pairs: compareResponse?.pairs ?? [],
+      pairs: compareSanitized.pairs,
       conflictIndexes: allConflictIndexes,
     },
   };

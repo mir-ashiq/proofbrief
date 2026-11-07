@@ -43,14 +43,23 @@ export function buildMarkdown(demoCase: DemoCase, result: AnalysisResult): strin
     lines.push(`supported ${(c.supported * 100).toFixed(0)}% · contradicted ${(c.contradicted * 100).toFixed(0)}% · not_stated ${(c.not_stated * 100).toFixed(0)}%`);
     if (c.evidence) {
       lines.push(`Evidence: “${c.evidence.quote}” — ${c.evidence.document}, chars ${c.evidence.start}–${c.evidence.end}, confidence ${(c.evidence.confidence * 100).toFixed(0)}%`);
+    } else if (c.evidenceWithheld) {
+      // Mirror the UI: a reference that does not match the submitted documents
+      // is never exported as evidence; the reason travels instead.
+      lines.push(`Evidence: withheld — Verify returned an evidence reference that does not match the submitted documents (${c.evidenceWithheld}); it is not shown as evidence, and the review state fails closed on this.`);
     } else {
       lines.push(`Evidence: none returned (evidence is optional even when requested)`);
     }
     if (c.closest && c.closest.length > 0) {
       // A supported claim without a Verify evidence quote carries its top
       // `use` passage as the claim-level quote in the UI; mirror it here.
+      // Never for a claim whose evidence was withheld for failing the
+      // reference check — the withheld note must stay unambiguous.
       const topUse =
-        !c.evidence && c.verdict !== "not_stated" && c.verdict !== "not_a_claim"
+        !c.evidence &&
+        !c.evidenceWithheld &&
+        c.verdict !== "not_stated" &&
+        c.verdict !== "not_a_claim"
           ? c.closest.find((r) => r.action === "use" && r.passage)
           : undefined;
       if (topUse?.passage) {
