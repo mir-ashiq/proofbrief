@@ -2,7 +2,7 @@
 
 import type { AnalysisResult } from "@/lib/analysis";
 import type { SourceDoc } from "@/lib/cases";
-import { sectionContextFor } from "@/lib/registry";
+import { sectionContextFor, resolveQuote } from "@/lib/registry";
 import { compareRelationMeta, formatProb } from "@/lib/display";
 import { ScoreBar } from "./ScoreBar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -88,6 +88,18 @@ export function CompareCard({
               {(pair.conflicts ?? []).length > 0 && (
                 <div className="mt-2 space-y-2" aria-label="Conflict findings">
                   {(pair.conflicts ?? []).map((f, j) => {
+                    // Endpoint quotes are verbatim extractions and can be as
+                    // short as a bare heading. Resolve each against its source
+                    // document: display the passage body (heading markers
+                    // stripped) or, for a heading-only extraction, the full
+                    // section located by the endpoint's own offsets. The raw
+                    // extraction and its offsets stay visible either way.
+                    const aRes = f.a
+                      ? resolveQuote(docs[f.a.document]?.text, f.a.quote, f.a.start, f.a.end)
+                      : undefined;
+                    const bRes = f.b
+                      ? resolveQuote(docs[f.b.document]?.text, f.b.quote, f.b.start, f.b.end)
+                      : undefined;
                     const aCtx = f.a ? contextFor(f.a.document, f.a.start, f.a.end) : undefined;
                     const bCtx = f.b ? contextFor(f.b.document, f.b.start, f.b.end) : undefined;
                     return (
@@ -98,13 +110,19 @@ export function CompareCard({
                         {f.confidence !== undefined ? ` · confidence ${formatProb(f.confidence)}` : ""}
                       </p>
                       <div className="grid gap-2 md:grid-cols-2">
-                        {f.a && (
+                        {f.a && aRes && (
                           <blockquote className="border-l-2 border-rose-300 pl-3 text-xs leading-relaxed text-foreground/85">
-                            “{f.a.quote}”
+                            “{aRes.display}”
                             <footer className="mt-1 text-muted-foreground">
                               {titleFor(f.a.document)} · chars {f.a.start}–{f.a.end}
                             </footer>
-                            {aCtx && aCtx.trim() !== f.a.quote.trim() && (
+                            {aRes.expanded && (
+                              <p className="mt-1 text-[10px] text-muted-foreground">
+                                Endpoint extraction was the section heading only: “{aRes.raw}” — the
+                                passage above is its full section from the source document.
+                              </p>
+                            )}
+                            {!aRes.expanded && aCtx && aCtx.trim() !== f.a.quote.trim() && (
                               <details className="mt-1.5">
                                 <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground hover:text-foreground">
                                   Section context from {titleFor(f.a.document)}
@@ -116,13 +134,19 @@ export function CompareCard({
                             )}
                           </blockquote>
                         )}
-                        {f.b && (
+                        {f.b && bRes && (
                           <blockquote className="border-l-2 border-rose-300 pl-3 text-xs leading-relaxed text-foreground/85">
-                            “{f.b.quote}”
+                            “{bRes.display}”
                             <footer className="mt-1 text-muted-foreground">
                               {titleFor(f.b.document)} · chars {f.b.start}–{f.b.end}
                             </footer>
-                            {bCtx && bCtx.trim() !== f.b.quote.trim() && (
+                            {bRes.expanded && (
+                              <p className="mt-1 text-[10px] text-muted-foreground">
+                                Endpoint extraction was the section heading only: “{bRes.raw}” — the
+                                passage above is its full section from the source document.
+                              </p>
+                            )}
+                            {!bRes.expanded && bCtx && bCtx.trim() !== f.b.quote.trim() && (
                               <details className="mt-1.5">
                                 <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground hover:text-foreground">
                                   Section context from {titleFor(f.b.document)}

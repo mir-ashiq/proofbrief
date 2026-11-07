@@ -101,6 +101,39 @@ No endpoint result was altered, cached, or fabricated; every verdict, score, quo
 
 ---
 
+## Run 3 — 2026-11-07, ~3:25 PM IST (09:55 UTC)
+
+Run immediately after the second round of evidence-display fixes (listed at the bottom). All four cases through `POST /api/analyze` with a live `CLOCKED_API_KEY`; model on every call `clocked-1.0`. All four triage states identical to Runs 1 and 2 — no regression from the display changes, which is expected: they touch only how endpoint outputs are shown, never what the endpoints returned.
+
+### Case 2 — True conflict (`conflict`)
+
+Claim #1 (12 months) `contradicted` (evidence quote from doc-sp21) · Compare pair `doc-sp21 ↔ doc-rs26` `conflicting`, one finding kind `value` · triage `conflict_needs_decision`.
+
+**Fix observed (opposing side, chosen by wording):** the claim card now leads with the opposing passage — "Audit log records are retained for 24 months from the date of record, then deleted." — from Retention Schedule 2026 (doc-rs26), attributed to the Compare cross-check, followed by the note "The claim's wording is closest to Security Policy v2.1 (doc-sp21)". The Verify evidence extraction (the 12-month quote) renders below it, labeled as what it is. The side selection compares the claim text to each side's passages (heading-only extractions resolved to their full sections first), so it cannot flip when Verify happens to cite the contradicting document as evidence; if the two sides cannot be told apart, both are shown side by side.
+
+**Fix observed (heading-only quote):** the pair finding's a-side extraction was again the bare heading `## Audit log retention` (chars 186–208). The cross-check card now displays the full 12-month section in its place, with the note "Endpoint extraction was the section heading only: '## Audit log retention'" — the raw extraction and its offsets stay visible. The b-side's leading `## Audit records` heading line is stripped from display; the sentence text is shown verbatim.
+
+### Case 4 — Different-scope numbers (`scope-trap`)
+
+Claim #2 (7-year backup archives) `supported` **without** an evidence quote, as in Runs 1–2 · Compare `unrelated` (0 conflicts) · triage `ready_for_review`.
+
+**Fix observed (claim-level quote for an unevidenced supported claim):** the claim-level Rerank lookup returned `doc-brs20-s1` (Backup retention) `use` at 99% relevance; the claim card now shows it as a quote block — "Full backup archives are retained for 7 years. …" — under "Closest source passage (Clocked Rerank — Verify returned no evidence quote for this claim)", with the enrichment-only disclaimer ("not Verify evidence; the verdict and the review state are exactly what the endpoints returned") and the remaining nearest sources listed below. The markdown export mirrors the same passage with the same attribution.
+
+### Cases 1 and 3
+
+Case 1 (`supported`): grounded 0.99+, both claims supported with evidence, `overlapping`, `ready_for_review` — unchanged. Case 3 (`missing`): both claims `not_stated`, all passages skipped, `missing_evidence` — unchanged. Trace latencies across all cases 327–626 ms per call; no errors, no retries.
+
+### What changed between runs (display layer only, round 2)
+
+1. **Quote resolution** (`src/lib/registry.ts`): endpoint extractions are resolved for display — a leading heading line is stripped, and a heading-only extraction is replaced by its full source section located by the endpoint's own character offsets. The raw extraction and offsets remain visible in a note; nothing outside the supplied documents is used.
+2. **Opposing-side selection by wording** (`src/lib/analysis.ts`): which side of a flagged Compare pair is "the opposing passage" for a contradicted claim is decided by token overlap between the claim text and each side's (resolved) passages — not by which document Verify cited as evidence. Indeterminate cases show both sides. All quotes shown are live endpoint outputs; only the labels are derived.
+3. **Contradicted claims lead with the opposition** (`src/components/proofbrief/VerifyCard.tsx`): the rose opposing-passage block renders above the teal Verify evidence extraction, so the citation a reviewer sees first on a conflicted claim is the passage that disagrees with it.
+4. **Claim-level quote for supported-but-unevidenced claims** (VerifyCard + ExportBar): the top `use` passage of the claim-level Rerank lookup renders as a quote block attached to the claim, clearly labeled as a relevance match rather than Verify evidence.
+
+Verified by `bun scripts/check-display-fixes.ts` (20 offline checks against the saved Run-2 endpoint outputs, including the flipped-evidence variance) and by the live Run 3 above. No endpoint result was altered, cached, or fabricated.
+
+---
+
 ## Run metadata template
 
 ```

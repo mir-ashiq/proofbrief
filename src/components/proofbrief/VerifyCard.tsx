@@ -1,11 +1,50 @@
 // ProofBrief — Verify results: the claim ledger. The heart of the screen.
+//
+// Display rules:
+// - A contradicted claim leads with the opposing passage of the flagged
+//   Compare pair (the reason the claim conflicts), then shows Verify's own
+//   evidence extraction. Both are live endpoint outputs, each labeled.
+// - A claim with no Verify evidence quote is never left bare: for supported
+//   claims the top `use` passage from the claim-level Rerank lookup is shown
+//   as a quote, clearly labeled as a relevance match, not Verify evidence.
 
-import type { AnalysisResult } from "@/lib/analysis";
+import type { AnalysisResult, PairSide } from "@/lib/analysis";
+import { stripHeadingLine } from "@/lib/registry";
 import { claimVerdictMeta, formatProb } from "@/lib/display";
 import { ScoreBar } from "./ScoreBar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { FileSearch } from "lucide-react";
+
+function SideQuotes({ side }: { side: PairSide }) {
+  if (side.quotes.length === 0) {
+    return (
+      <p className="text-xs leading-relaxed text-foreground/80">
+        {side.docTitle} ({side.docId}) is flagged in this pair but came back without a paired
+        quote.
+      </p>
+    );
+  }
+  return (
+    <ul className="space-y-1.5">
+      {side.quotes.map((q, j) => (
+        <li key={j} className="text-xs leading-relaxed text-foreground/85">
+          “{q.quote}”
+          <span className="text-muted-foreground">
+            {" "}— {side.docTitle} ({side.docId})
+            {q.start !== undefined && q.end !== undefined ? ` · chars ${q.start}–${q.end}` : ""}
+          </span>
+          {q.expanded && (
+            <span className="block text-[10px] text-muted-foreground">
+              Endpoint extraction was the section heading only: “{q.raw}” — the passage above is
+              its full section from the source document.
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export function VerifyCard({ verify, docTitles }: { verify: AnalysisResult["verify"]; docTitles: Record<string, string> }) {
   const titleFor = (id: string | undefined | null) =>
@@ -50,6 +89,17 @@ export function VerifyCard({ verify, docTitles }: { verify: AnalysisResult["veri
         {verify.claims.map((c, i) => {
           const meta = claimVerdictMeta(c.verdict);
           const opp = c.opposing;
+          const contradicted = c.verdict === "contradicted";
+          // Claim-level quote for a supported claim that Verify left without an
+          // evidence quote: the top `use` passage of the claim-level Rerank
+          // lookup, shown as a quote but labeled as what it is.
+          const closestUse =
+            !c.evidence && c.verdict !== "not_stated" && c.verdict !== "not_a_claim"
+              ? c.closest?.find((r) => r.action === "use" && r.passage)
+              : undefined;
+          const otherClosest = closestUse
+            ? (c.closest ?? []).filter((r) => r !== closestUse)
+            : c.closest;
           return (
             <article
               key={i}
@@ -70,45 +120,41 @@ export function VerifyCard({ verify, docTitles }: { verify: AnalysisResult["veri
                 <ScoreBar value={c.contradicted} label="contradicted" tone="rose" />
                 <ScoreBar value={c.not_stated} label="not_stated" tone="amber" />
               </div>
-              {c.evidence ? (
-                <blockquote className="mt-2 border-l-2 border-teal-300 bg-teal-50/50 pl-3 text-sm leading-relaxed text-foreground/85">
-                  “{c.evidence.quote}”
-                  <footer className="mt-1 text-xs text-muted-foreground">
-                    {titleFor(c.evidence.document)} · chars {c.evidence.start}–{c.evidence.end} ·
-                    confidence {formatProb(c.evidence.confidence)}
-                  </footer>
-                </blockquote>
-              ) : (
-                <p className="mt-2 rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
-                  Evidence passage not returned for this claim. Evidence is optional even when
-                  requested; no passage is invented when one is absent.
-                </p>
-              )}
               {opp && (
                 <div className="mt-2 rounded-md border border-rose-200 bg-rose-50/60 p-2.5">
-                  <p className="mb-1.5 text-xs font-semibold text-rose-900">
-                    Opposing passage — from the flagged source pair (Clocked Compare, not Verify
-                    evidence):
-                  </p>
-                  {opp.quotes.length > 0 ? (
-                    <ul className="space-y-1.5">
-                      {opp.quotes.map((q, j) => (
-                        <li key={j} className="text-xs leading-relaxed text-foreground/85">
-                          “{q.quote}”
-                          <span className="text-muted-foreground">
-                            {" "}— {opp.docTitle} ({opp.docId})
-                            {q.start !== undefined && q.end !== undefined
-                              ? ` · chars ${q.start}–${q.end}`
-                              : ""}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
+                  {!opp.indeterminate && opp.opposing ? (
+                    <>
+                      <p className="mb-1.5 text-xs font-semibold text-rose-900">
+                        Opposing passage — the other side of the flagged source pair (Clocked
+                        Compare, not Verify evidence):
+                      </p>
+                      <SideQuotes side={opp.opposing} />
+                      {opp.claimSide && (
+                        <p className="mt-1.5 text-[11px] leading-relaxed text-rose-900/80">
+                          The claim’s wording is closest to {opp.claimSide.docTitle} (
+                          {opp.claimSide.docId}); the passage above is from{" "}
+                          {opp.opposing.docTitle} ({opp.opposing.docId}), the other document of the
+                          flagged pair.
+                        </p>
+                      )}
+                    </>
                   ) : (
-                    <p className="text-xs leading-relaxed text-foreground/80">
-                      {opp.docTitle} is flagged conflicting with the claim’s evidence document, but
-                      the pair came back without a paired quote. See the cross-check below.
-                    </p>
+                    <>
+                      <p className="mb-1.5 text-xs font-semibold text-rose-900">
+                        Both sides of the flagged source pair (Clocked Compare, not Verify
+                        evidence) — the claim’s side could not be told apart by wording:
+                      </p>
+                      <div className="space-y-2">
+                        {opp.sides.map((s, k) => (
+                          <div key={s.docId + k}>
+                            <p className="text-[11px] font-medium text-rose-900/90">
+                              {s.docTitle} ({s.docId}):
+                            </p>
+                            <SideQuotes side={s} />
+                          </div>
+                        ))}
+                      </div>
+                    </>
                   )}
                   <a
                     href={`#compare-pair-${opp.pairIndex}`}
@@ -118,7 +164,46 @@ export function VerifyCard({ verify, docTitles }: { verify: AnalysisResult["veri
                   </a>
                 </div>
               )}
-              {c.closest && c.closest.length > 0 && (
+              {c.evidence ? (
+                <blockquote className="mt-2 border-l-2 border-teal-300 bg-teal-50/50 pl-3 text-sm leading-relaxed text-foreground/85">
+                  {contradicted && (
+                    <p className="mb-1 text-[11px] font-medium text-teal-900">
+                      Verify evidence extraction for this claim:
+                    </p>
+                  )}
+                  “{c.evidence.quote}”
+                  <footer className="mt-1 text-xs text-muted-foreground">
+                    {titleFor(c.evidence.document)} · chars {c.evidence.start}–{c.evidence.end} ·
+                    confidence {formatProb(c.evidence.confidence)}
+                  </footer>
+                </blockquote>
+              ) : closestUse && closestUse.passage ? (
+                <blockquote className="mt-2 border-l-2 border-teal-300 bg-teal-50/50 pl-3 text-sm leading-relaxed text-foreground/85">
+                  <p className="mb-1 text-[11px] font-medium text-teal-900">
+                    Closest source passage (Clocked Rerank — Verify returned no evidence quote for
+                    this claim):
+                  </p>
+                  “{stripHeadingLine(closestUse.passage.text).trim()}”
+                  <footer className="mt-1 text-xs text-muted-foreground">
+                    {closestUse.passage.docTitle} — section “{closestUse.passage.section}” ·
+                    passage {closestUse.passage.id} · relevance{" "}
+                    {formatProb(closestUse.relevance_score)} · action {closestUse.action}
+                  </footer>
+                </blockquote>
+              ) : (
+                <p className="mt-2 rounded-md border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+                  Evidence passage not returned for this claim. Evidence is optional even when
+                  requested; no passage is invented when one is absent.
+                </p>
+              )}
+              {closestUse && (
+                <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
+                  Enrichment only: this passage is the top relevance match for the claim, not
+                  Verify evidence. The verdict and the review state are exactly what the endpoints
+                  returned.
+                </p>
+              )}
+              {otherClosest && otherClosest.length > 0 && (
                 <div
                   className={`mt-2 rounded-md border p-2.5 ${
                     c.verdict === "not_stated"
@@ -133,10 +218,12 @@ export function VerifyCard({ verify, docTitles }: { verify: AnalysisResult["veri
                   >
                     {c.verdict === "not_stated"
                       ? "Nearest sources for this claim (Clocked Rerank) — what the documents do say:"
-                      : "No evidence quote was returned. Nearest sources by relevance (Clocked Rerank):"}
+                      : closestUse
+                        ? "Other nearest sources by relevance (Clocked Rerank):"
+                        : "No evidence quote was returned. Nearest sources by relevance (Clocked Rerank):"}
                   </p>
                   <ul className="space-y-1.5">
-                    {c.closest.map((r, j) => (
+                    {otherClosest.map((r, j) => (
                       <li
                         key={r.passage?.id ?? j}
                         className="text-xs leading-relaxed text-foreground/85"

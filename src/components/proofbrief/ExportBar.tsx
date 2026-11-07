@@ -39,24 +39,56 @@ function buildMarkdown(demoCase: DemoCase, result: AnalysisResult): string {
       lines.push(`Evidence: none returned (evidence is optional even when requested)`);
     }
     if (c.closest && c.closest.length > 0) {
+      // A supported claim without a Verify evidence quote carries its top
+      // `use` passage as the claim-level quote in the UI; mirror it here.
+      const topUse =
+        !c.evidence && c.verdict !== "not_stated" && c.verdict !== "not_a_claim"
+          ? c.closest.find((r) => r.action === "use" && r.passage)
+          : undefined;
+      if (topUse?.passage) {
+        lines.push(
+          `Closest source passage (Clocked Rerank, enrichment only — Verify returned no evidence quote; relevance ${(topUse.relevance_score * 100).toFixed(0)}%): “${topUse.passage.text}” — ${topUse.passage.docTitle}, section “${topUse.passage.section}”`,
+        );
+      }
       lines.push(
         c.verdict === "not_stated"
           ? `Nearest sources (Clocked Rerank, enrichment only — these did not establish the claim):`
-          : `Nearest sources by relevance (Clocked Rerank, display-only — Verify returned no evidence quote):`,
+          : `Nearest sources by relevance (Clocked Rerank, display-only):`,
       );
-      c.closest.forEach((r) => {
-        lines.push(`  - \`${r.passage?.id ?? r.index}\` ${r.action}${r.reason ? ` (${r.reason})` : ""} — “${(r.passage?.text ?? "").slice(0, 160)}”`);
-      });
+      c.closest
+        .filter((r) => r !== topUse)
+        .forEach((r) => {
+          lines.push(`  - \`${r.passage?.id ?? r.index}\` ${r.action}${r.reason ? ` (${r.reason})` : ""} — “${(r.passage?.text ?? "").slice(0, 160)}”`);
+        });
     }
     const opp = c.opposing;
     if (opp) {
-      lines.push(`Opposing passage — from the flagged source pair (Clocked Compare, pair index ${opp.pairIndex}):`);
-      if (opp.quotes.length > 0) {
-        opp.quotes.forEach((q) => {
-          lines.push(`  - ${opp.docTitle} (${opp.docId}): “${q.quote}”`);
-        });
+      if (!opp.indeterminate && opp.opposing) {
+        const opposing = opp.opposing;
+        lines.push(`Opposing passage — the other side of the flagged source pair (Clocked Compare, pair index ${opp.pairIndex}):`);
+        if (opposing.quotes.length > 0) {
+          opposing.quotes.forEach((q) => {
+            lines.push(
+              `  - ${opposing.docTitle} (${opposing.docId}): “${q.quote}”${q.expanded ? ` — endpoint extraction was the section heading only (“${q.raw}”); the full section is shown` : ""}`,
+            );
+          });
+        } else {
+          lines.push(`  - ${opposing.docTitle} (${opposing.docId}): flagged conflicting without a paired quote`);
+        }
+        if (opp.claimSide) {
+          lines.push(`  - The claim’s wording is closest to ${opp.claimSide.docTitle} (${opp.claimSide.docId}).`);
+        }
       } else {
-        lines.push(`  - ${opp.docTitle} (${opp.docId}): flagged conflicting without a paired quote`);
+        lines.push(`Both sides of the flagged source pair (Clocked Compare, pair index ${opp.pairIndex}) — the claim’s side could not be told apart by wording:`);
+        opp.sides.forEach((s) => {
+          if (s.quotes.length === 0) {
+            lines.push(`  - ${s.docTitle} (${s.docId}): flagged in this pair without a paired quote`);
+          } else {
+            s.quotes.forEach((q) => {
+              lines.push(`  - ${s.docTitle} (${s.docId}): “${q.quote}”`);
+            });
+          }
+        });
       }
     }
   });

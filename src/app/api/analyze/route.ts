@@ -243,13 +243,18 @@ export async function POST(req: NextRequest) {
   }
 
   // ---- Stage 5: join contradicted claims to the opposing side of a flagged pair ----
-  const docTitleMap = Object.fromEntries(demoCase.docs.map((d) => [d.id, d.title]));
+  // Which side of a flagged pair opposes the claim is decided by wording
+  // (claim text vs. each side's passages), so the join cannot flip when Verify
+  // happens to cite either passage as evidence. Display-only.
+  const docMap = Object.fromEntries(
+    demoCase.docs.map((d) => [d.id, { title: d.title, text: d.text }]),
+  );
   const enrichedClaims: EnrichedClaim[] = rawClaims.map((c, i) => ({
     ...c,
     closest: closestByIndex.get(i),
     opposing:
       verifyOk && compareOk
-        ? findOpposingEvidence(c, compareResponse?.pairs ?? [], allConflictIndexes, docTitleMap)
+        ? findOpposingEvidence(c, compareResponse?.pairs ?? [], allConflictIndexes, docMap)
         : undefined,
   }));
 

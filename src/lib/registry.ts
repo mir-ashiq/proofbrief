@@ -81,6 +81,78 @@ export function joinResultToPassage(
   return sentOrder[result.index];
 }
 
+// ---- Quote display resolution ----
+//
+// Clocked Verify and Compare return verbatim extractions, and an extraction
+// can be as thin as a bare section heading ("## Audit log retention") or start
+// with a heading line. A heading is not evidence a reviewer can read. These
+// helpers keep the endpoint's raw extraction (it is the record of what the
+// endpoint said) while choosing what to display: the quote's body text, or —
+// when the extraction carries no body — the surrounding source section located
+// by the endpoint's own character offsets. Nothing outside the supplied
+// documents is ever used.
+
+export interface ResolvedQuote {
+  /** Text to display: heading markers stripped; a heading-only extraction is
+   *  replaced by its full source section. */
+  display: string;
+  /** The endpoint's exact extraction, kept for the attribution note. */
+  raw: string;
+  /** True when `display` substitutes the surrounding section for the raw
+   *  extraction (raw was heading-only or empty). */
+  expanded: boolean;
+}
+
+/** Remove a single leading "# …" heading line from a passage or quote. */
+export function stripHeadingLine(text: string): string {
+  const m = text.match(/^\s*#{1,6}\s+.+\r?\n/);
+  return m ? text.slice(m[0].length) : text;
+}
+
+/**
+ * True when the text carries no substantive body: empty, or a short run of
+ * words with no digits and no sentence punctuation — i.e. a bare heading.
+ */
+export function isHeadingOnly(text: string): boolean {
+  const t = text.trim();
+  if (t.length === 0) return true;
+  const withoutMarker = t.replace(/^#{1,6}\s+/, "");
+  const words = withoutMarker.split(/\s+/).filter(Boolean).length;
+  const hasPunctuation = /[.;:,]/.test(withoutMarker);
+  const hasDigits = /\d/.test(withoutMarker);
+  return words <= 10 && !hasPunctuation && !hasDigits;
+}
+
+const DISPLAY_CAP = 600;
+
+/**
+ * Resolve an endpoint extraction for display against its source document.
+ * The raw extraction is always preserved; only the displayed text changes.
+ */
+export function resolveQuote(
+  docText: string | undefined,
+  quote: string,
+  start?: number,
+  end?: number,
+): ResolvedQuote {
+  const body = stripHeadingLine(quote).trim();
+  if (!isHeadingOnly(body)) {
+    return { display: body, raw: quote, expanded: false };
+  }
+  // Heading-only (or empty) extraction: show the surrounding source section,
+  // located by the endpoint's own offsets in the supplied document.
+  const section = docText ? sectionContextFor(docText, start, end) : undefined;
+  if (section && !isHeadingOnly(section)) {
+    const display = stripHeadingLine(section).trim();
+    return {
+      display: display.length > DISPLAY_CAP ? display.slice(0, DISPLAY_CAP) + "…" : display,
+      raw: quote,
+      expanded: true,
+    };
+  }
+  return { display: quote.trim(), raw: quote, expanded: false };
+}
+
 /**
  * Return the section (delimited by "## " headings) of `docText` that contains
  * the given character range, or undefined when the range is not usable. Used
