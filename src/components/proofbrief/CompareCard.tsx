@@ -1,0 +1,143 @@
+// ProofBrief — Compare results: pairwise relations between the source documents.
+
+import type { AnalysisResult } from "@/lib/analysis";
+import { compareRelationMeta, formatProb } from "@/lib/display";
+import { ScoreBar } from "./ScoreBar";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { GitCompareArrows } from "lucide-react";
+
+export function CompareCard({
+  compare,
+  docTitles,
+}: {
+  compare: AnalysisResult["compare"];
+  docTitles: Record<string, string>;
+}) {
+  const titleFor = (id: string) => docTitles[id] ?? id;
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <GitCompareArrows className="h-4 w-4 text-teal-700" aria-hidden="true" />
+            Source cross-check
+          </CardTitle>
+          <div className="flex items-center gap-2">
+            <Badge variant="outline" className="border-teal-200 bg-teal-50 font-normal text-teal-800">
+              Clocked Compare
+            </Badge>
+            {compare.model && (
+              <span className="font-mono text-[10px] text-muted-foreground">{compare.model}</span>
+            )}
+          </div>
+        </div>
+        <CardDescription>
+          Every pair of source documents, with paired passages for duplicates and conflicts. A
+          differing number alone is not a contradiction: same entity, period, and scope are required.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {!compare.ok && compare.error && (
+          <p className="rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+            Compare could not complete ({compare.error.code}): {compare.error.message}
+          </p>
+        )}
+        {compare.ok && compare.pairs.length === 0 && (
+          <p className="text-sm text-muted-foreground">Compare returned no pairs.</p>
+        )}
+        {compare.pairs.map((pair, i) => {
+          const meta = compareRelationMeta(pair.relation);
+          const isConflict = pair.relation === "conflicting" || compare.conflictIndexes.includes(i);
+          return (
+            <article
+              key={i}
+              className={`rounded-md border p-3 ${isConflict ? "border-rose-300 bg-rose-50/40" : "border-border bg-card"}`}
+              aria-label={`Pair ${titleFor(pair.a)} and ${titleFor(pair.b)}: ${meta.label}`}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-medium text-foreground">
+                  {titleFor(pair.a)} <span aria-hidden="true">↔</span> {titleFor(pair.b)}
+                </span>
+                <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${meta.badge}`}>
+                  {meta.label}
+                </span>
+                <span className="ml-auto font-mono text-[10px] text-muted-foreground">
+                  pair index {i}
+                </span>
+              </div>
+              <div className="mt-2">
+                <ScoreBar
+                  value={pair.related}
+                  label="related probability"
+                  tone={isConflict ? "rose" : "teal"}
+                />
+              </div>
+              {(pair.conflicts ?? []).length > 0 && (
+                <div className="mt-2 space-y-2" aria-label="Conflict findings">
+                  {(pair.conflicts ?? []).map((f, j) => (
+                    <div key={j} className="rounded-md border border-rose-200 bg-rose-50 p-2.5">
+                      <p className="mb-1.5 text-xs font-semibold text-rose-900">
+                        Conflict finding {j + 1}
+                        {f.kind ? ` · kind: ${f.kind}` : ""}
+                        {f.confidence !== undefined ? ` · confidence ${formatProb(f.confidence)}` : ""}
+                      </p>
+                      <div className="grid gap-2 md:grid-cols-2">
+                        {f.a && (
+                          <blockquote className="border-l-2 border-rose-300 pl-3 text-xs leading-relaxed text-foreground/85">
+                            “{f.a.quote}”
+                            <footer className="mt-1 text-muted-foreground">
+                              {titleFor(f.a.document)} · chars {f.a.start}–{f.a.end}
+                            </footer>
+                          </blockquote>
+                        )}
+                        {f.b && (
+                          <blockquote className="border-l-2 border-rose-300 pl-3 text-xs leading-relaxed text-foreground/85">
+                            “{f.b.quote}”
+                            <footer className="mt-1 text-muted-foreground">
+                              {titleFor(f.b.document)} · chars {f.b.start}–{f.b.end}
+                            </footer>
+                          </blockquote>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  <p className="text-xs text-muted-foreground">
+                    A human decides whether one document should be retired or the scope clarified.
+                    ProofBrief blocks approval until then.
+                  </p>
+                </div>
+              )}
+              {(pair.conflicts ?? []).length === 0 && pair.relation !== "unrelated" && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  No conflict findings for this pair.
+                  {pair.relation === "same" || pair.relation === "overlapping"
+                    ? " The documents agree or overlap on shared content."
+                    : ""}
+                </p>
+              )}
+              {(pair.duplicates ?? []).length > 0 && (
+                <details className="mt-1.5">
+                  <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                    {(pair.duplicates ?? []).length} duplicate finding
+                    {(pair.duplicates ?? []).length > 1 ? "s" : ""} (paired passages)
+                  </summary>
+                  <div className="mt-1.5 space-y-1.5">
+                    {(pair.duplicates ?? []).map((f, j) => (
+                      <p key={j} className="text-xs text-muted-foreground">
+                        {f.kind ? `kind: ${f.kind}` : "duplicate"} — “{(f.a?.quote ?? "").slice(0, 90)}…” ≈ “{(f.b?.quote ?? "").slice(0, 90)}…”
+                      </p>
+                    ))}
+                  </div>
+                </details>
+              )}
+            </article>
+          );
+        })}
+        {compare.ok && compare.verdict && (
+          <p className="text-xs text-muted-foreground">Endpoint roll-up verdict: {compare.verdict}</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
