@@ -110,7 +110,7 @@ export const TRIAGE_META: Record<
   analysis_incomplete: {
     title: "Analysis incomplete — retry later",
     blurb:
-      "A Clocked endpoint was rate-limited or temporarily unavailable. Nothing was approved or cleared. This is not a source conflict and not a verdict — run the check again in a few moments.",
+      "A Clocked endpoint was rate-limited, temporarily unavailable, or could not finish within the run's time budget. Nothing was approved and nothing was cleared. This is not a source conflict and not a verdict — run the check again in a few moments.",
     container: "border-sky-300 bg-sky-50",
     badge: "border-sky-400 bg-sky-100 text-sky-900",
   },

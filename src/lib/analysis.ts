@@ -148,8 +148,9 @@ export interface AnalysisResult {
 /**
  * Compute the review state from live endpoint outputs.
  *
- * - A retryable endpoint failure (429 / 5xx / network) => analysis_incomplete:
- *   fail closed, labeled "retry later", clearly NOT a source conflict.
+ * - A retryable endpoint failure (429 / 5xx / network / run-budget expiry)
+ *   => analysis_incomplete: fail closed, labeled "retry later", clearly NOT a
+ *   source conflict.
  * - Any other endpoint error, invalid response, no usable Rerank passage, or
  *   a missing answers_question score => review_required (fail closed).
  * - A Compare pair flagged conflicting, or a Verify claim contradicted,
@@ -175,6 +176,7 @@ export function isRetryableError(err: { code: string }): boolean {
     err.code === "http_429" ||
     err.code === "network" ||
     err.code === "timeout" ||
+    err.code === "deadline_exceeded" ||
     /^http_5\d\d$/.test(err.code)
   );
 }
@@ -216,7 +218,7 @@ export function computeTriage(input: {
       return {
         state: "analysis_incomplete",
         reasons: [
-          "Analysis incomplete — retry later. A Clocked endpoint was rate-limited or temporarily unavailable, so no verdict can be shown for this draft.",
+          "Analysis incomplete — retry later. A Clocked endpoint was rate-limited, temporarily unavailable, or could not finish within this run's time budget, so no verdict can be shown for this draft.",
           ...endpointErrors,
           "This is not a source conflict and not a verdict on the draft: an endpoint call did not complete. Run the check again in a few moments.",
         ],

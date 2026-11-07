@@ -59,6 +59,7 @@ server.log
 /download/
 /scripts/*
 !/scripts/check-display-fixes.ts
+!/scripts/check-time-budget.ts
 /tool-results/*
 !/tool-results/run2-conflict.json
 /agent-ctx/

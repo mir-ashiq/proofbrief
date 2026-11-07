@@ -9,6 +9,13 @@
 //                 requests), plus a short per-IP cooldown. Over the cap the
 //                 route answers 429 "busy" so the client can retry, matching
 //                 the platform's limits guidance: wait, never parallelize.
+//   0b. Budget  — every call, retry, and optional lookup of a run is capped to
+//                 fit a hard wall-clock budget (ANALYSIS_BUDGET_MS) well inside
+//                 this route's maxDuration, so the platform can never kill the
+//                 function mid-run: the run itself gives up first and answers
+//                 analysis_incomplete (retry later — never a verdict, never a
+//                 source conflict). Optional enrichment is skipped when any
+//                 core call failed or the remaining budget is short.
 //   1. Rerank   — rank every registry passage against the question (shortlist)
 //   2. Verify   — judge each draft claim against the supplied documents
 //   3. Compare  — cross-check the source documents pairwise
@@ -53,13 +60,37 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-/** A run with retries can take a while; allow the function time to finish cleanly. */
+/** Platform cap for the function; the run's own hard budget (ANALYSIS_BUDGET_MS) sits 10 s under it, so the route always answers before this limit. */
 export const maxDuration = 60;
 
 /** How many claims get a nearest-source lookup (concurrency budget). */
 const MAX_CLOSEST_LOOKUPS = 4;
 /** Lookups run in waves of at most this size, after the core calls settle. */
 const LOOKUP_WAVE_SIZE = 3;
+
+/**
+ * Hard wall-clock budget for one analysis run, in ms.
+ *
+ * The route's maxDuration is 60 s, but a single logical Clocked request can
+ * wait up to 120 s per attempt across 3 attempts, and the follow-up lookups
+ * add up to two more waves — without a budget the worst case is minutes and
+ * the platform would terminate the function mid-run with no review state at
+ * all. Every attempt timeout, backoff, and optional lookup is instead capped
+ * to finish by this deadline (see CallOptions in src/lib/clocked.ts), so the
+ * run answers within 50 s and leaves ~10 s of margin for validation, joins,
+ * JSON serialization, and delivery before maxDuration. A run that runs out
+ * of budget fails closed as analysis_incomplete — never "ready", never a
+ * source conflict. 50 s is also generous in practice: observed per-call
+ * latencies are well under one second (docs/test-log.md), so the budget only
+ * binds when an endpoint hangs or throttles.
+ */
+const ANALYSIS_BUDGET_MS = 50_000;
+/**
+ * A lookup wave (optional, display-only enrichment) is only started with at
+ * least this much budget left — enough for a rerank attempt plus a short
+ * backoff. The per-call deadline remains the hard cap either way.
+ */
+const ENRICHMENT_MIN_REMAINING_MS = 10_000;
 
 // ---- Concurrency / rate guard (best-effort, per serverless instance) ----
 //
@@ -196,6 +227,10 @@ export async function POST(req: NextRequest) {
 }
 
 async function runAnalysis(demoCase: NonNullable<ReturnType<typeof getCase>>): Promise<NextResponse> {
+  // The run's hard deadline: every Clocked call below receives it and caps
+  // its attempts, backoffs, and retries to fit (see src/lib/clocked.ts).
+  const deadline = Date.now() + ANALYSIS_BUDGET_MS;
+
   // Registry: passages with ids and offsets, built before any call is made.
   const registry = buildRegistry(demoCase.docs);
   const sentOrder = registry;
@@ -204,25 +239,34 @@ async function runAnalysis(demoCase: NonNullable<ReturnType<typeof getCase>>): P
 
   // ---- Stages 1–3: the three core calls, in parallel ----
   const [rerankSettled, verifySettled, compareSettled] = await Promise.allSettled([
-    rerank({
-      query: demoCase.question,
-      documents: rerankDocuments,
-      context: demoCase.context,
-      instructions: RERANK_INSTRUCTIONS,
-    }),
-    verify({
-      documents: verifyDocuments,
-      answer: demoCase.draft,
-      question: demoCase.question,
-      instructions: VERIFY_INSTRUCTIONS,
-      evidence: "all",
-    }),
-    compare({
-      documents: verifyDocuments,
-      instructions: COMPARE_INSTRUCTIONS,
-      kinds: true,
-      evidence: "all",
-    }),
+    rerank(
+      {
+        query: demoCase.question,
+        documents: rerankDocuments,
+        context: demoCase.context,
+        instructions: RERANK_INSTRUCTIONS,
+      },
+      { deadline },
+    ),
+    verify(
+      {
+        documents: verifyDocuments,
+        answer: demoCase.draft,
+        question: demoCase.question,
+        instructions: VERIFY_INSTRUCTIONS,
+        evidence: "all",
+      },
+      { deadline },
+    ),
+    compare(
+      {
+        documents: verifyDocuments,
+        instructions: COMPARE_INSTRUCTIONS,
+        kinds: true,
+        evidence: "all",
+      },
+      { deadline },
+    ),
   ]);
 
   // ---- Stage 4: runtime validation of every response (fail closed) ----
@@ -299,17 +343,26 @@ async function runAnalysis(demoCase: NonNullable<ReturnType<typeof getCase>>): P
     .slice(0, MAX_CLOSEST_LOOKUPS);
 
   const closestByIndex = new Map<number, JoinedRerankResult[]>();
-  for (let w = 0; w < lookupTargets.length; w += LOOKUP_WAVE_SIZE) {
+  // Optional, display-only: skip the lookups entirely when any core call
+  // failed (the run is already analysis_incomplete / review_required, and a
+  // failing endpoint would likely fail again) or when the remaining budget
+  // cannot fit a lookup wave. Enrichment never changes the review state.
+  const coreOk = rerankOk && verifyOk && compareOk;
+  for (let w = 0; coreOk && w < lookupTargets.length; w += LOOKUP_WAVE_SIZE) {
+    if (deadline - Date.now() < ENRICHMENT_MIN_REMAINING_MS) break;
     const wave = lookupTargets.slice(w, w + LOOKUP_WAVE_SIZE);
     const lookups = await Promise.allSettled(
       wave.map(({ claim }) =>
-        rerank({
-          query: claim,
-          documents: rerankDocuments,
-          context: demoCase.context,
-          instructions: RERANK_INSTRUCTIONS,
-          top_n: 3,
-        }),
+        rerank(
+          {
+            query: claim,
+            documents: rerankDocuments,
+            context: demoCase.context,
+            instructions: RERANK_INSTRUCTIONS,
+            top_n: 3,
+          },
+          { deadline },
+        ),
       ),
     );
     lookups.forEach((settled, j) => {

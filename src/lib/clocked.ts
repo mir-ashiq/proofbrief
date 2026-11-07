@@ -7,6 +7,22 @@
 const BASE_URL = "https://clocked.rezolve.ai/clocked";
 const TIMEOUT_MS = 120_000;
 
+/**
+ * Options for one logical Clocked request.
+ */
+export interface CallOptions {
+  /**
+   * Epoch-milliseconds deadline for the whole logical request: every attempt
+   * timeout, backoff, and retry is capped so the request gives up by this
+   * moment. The caller (the /api/analyze route) sets it from its overall run
+   * budget, which must stay inside the route's maxDuration — otherwise the
+   * platform would kill the function mid-run with no review state at all.
+   * Past the deadline the request fails with code "deadline_exceeded",
+   * which maps to analysis_incomplete (retry later), never a verdict.
+   */
+  deadline?: number;
+}
+
 export class ClockedError extends Error {
   code: string;
   status: number;
@@ -48,6 +64,7 @@ async function postOnce<T>(
   endpoint: string,
   body: unknown,
   idempotencyKey: string,
+  timeoutMs: number,
 ): Promise<T> {
   const key = process.env.CLOCKED_API_KEY;
   if (!key) {
@@ -64,7 +81,7 @@ async function postOnce<T>(
       "Idempotency-Key": idempotencyKey,
     },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
@@ -109,30 +126,69 @@ export interface ClockedCall<T> {
  * on every retry, so a retry cannot double-charge or double-run. Backoff is
  * exponential with jitter, capped, and honors a server Retry-After hint;
  * after MAX_ATTEMPTS the error is thrown and the workflow fails closed.
+ *
+ * With `opts.deadline` set, the whole logical request is additionally capped
+ * to finish by that moment: each attempt's timeout becomes
+ * min(TIMEOUT_MS, time left), and a retry is only started when the backoff
+ * still leaves room for a meaningful attempt. Past the deadline the error is
+ * "deadline_exceeded" — a retry-later condition, like 429 and 5xx.
  */
 const MAX_ATTEMPTS = 3;
 const BASE_BACKOFF_MS = [800, 2000];
 const BACKOFF_CAP_MS = 8000;
+/** A retry is only worth starting with this much time left after its backoff. */
+const MIN_ATTEMPT_BUDGET_MS = 2000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function callClocked<T>(endpoint: string, body: unknown): Promise<ClockedCall<T>> {
+function deadlineExceeded(endpoint: string, detail: string): ClockedError {
+  return new ClockedError(
+    "deadline_exceeded",
+    `${endpoint} gave up: the run's time budget is exhausted (${detail}).`,
+  );
+}
+
+async function callClocked<T>(
+  endpoint: string,
+  body: unknown,
+  opts: CallOptions = {},
+): Promise<ClockedCall<T>> {
   const idempotencyKey = crypto.randomUUID();
   const startedAt = Date.now();
   let attempts = 0;
   while (true) {
     attempts += 1;
+    const timeLeft = opts.deadline === undefined ? Infinity : opts.deadline - Date.now();
+    if (timeLeft <= 0) {
+      throw deadlineExceeded(endpoint, "no time left before the request could be sent");
+    }
     try {
-      const data = await postOnce<T>(endpoint, body, idempotencyKey);
+      const data = await postOnce<T>(endpoint, body, idempotencyKey, Math.min(TIMEOUT_MS, timeLeft));
       return { data, idempotencyKey, latencyMs: Date.now() - startedAt, attempts };
     } catch (err) {
+      // An attempt aborted by the per-attempt cap above has, by construction,
+      // run the budget dry: report the deadline, not a generic network error.
+      if (opts.deadline !== undefined && opts.deadline - Date.now() <= 0) {
+        throw deadlineExceeded(endpoint, `no time left during attempt ${attempts}`);
+      }
       if (!isRetryable(err) || attempts >= MAX_ATTEMPTS) throw err;
       const hint = err instanceof ClockedError ? err.retryAfterMs : undefined;
       const base = hint ?? BASE_BACKOFF_MS[Math.min(attempts - 1, BASE_BACKOFF_MS.length - 1)];
-      const jittered = base * (0.8 + Math.random() * 0.4); // ±20% jitter
-      await sleep(Math.min(jittered, BACKOFF_CAP_MS));
+      const jittered = Math.min(base * (0.8 + Math.random() * 0.4), BACKOFF_CAP_MS); // ±20% jitter
+      // Retry only if the backoff still fits the budget with room for an
+      // attempt; otherwise the run is out of time and fails closed.
+      const left = opts.deadline === undefined ? Infinity : opts.deadline - Date.now();
+      if (left - jittered < MIN_ATTEMPT_BUDGET_MS) {
+        throw deadlineExceeded(
+          endpoint,
+          `not enough time left to wait ${Math.round(jittered)} ms and retry; last error: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      await sleep(jittered);
     }
   }
 }
@@ -212,31 +268,40 @@ export interface CompareResponse {
 
 // ---- Endpoint wrappers ----
 
-export function rerank(payload: {
-  query: string;
-  documents: { id: string; text: string; title: string; metadata?: Record<string, string> }[];
-  context?: unknown;
-  instructions?: string;
-  top_n?: number;
-}): Promise<ClockedCall<RerankResponse>> {
-  return callClocked<RerankResponse>("rerank", payload);
+export function rerank(
+  payload: {
+    query: string;
+    documents: { id: string; text: string; title: string; metadata?: Record<string, string> }[];
+    context?: unknown;
+    instructions?: string;
+    top_n?: number;
+  },
+  opts: CallOptions = {},
+): Promise<ClockedCall<RerankResponse>> {
+  return callClocked<RerankResponse>("rerank", payload, opts);
 }
 
-export function verify(payload: {
-  documents: { id: string; text: string }[];
-  answer: string;
-  question?: string;
-  instructions?: string;
-  evidence?: "all" | "flagged" | "none";
-}): Promise<ClockedCall<VerifyResponse>> {
-  return callClocked<VerifyResponse>("grounding", payload);
+export function verify(
+  payload: {
+    documents: { id: string; text: string }[];
+    answer: string;
+    question?: string;
+    instructions?: string;
+    evidence?: "all" | "flagged" | "none";
+  },
+  opts: CallOptions = {},
+): Promise<ClockedCall<VerifyResponse>> {
+  return callClocked<VerifyResponse>("grounding", payload, opts);
 }
 
-export function compare(payload: {
-  documents: { id: string; text: string }[];
-  instructions?: string;
-  kinds?: boolean;
-  evidence?: "all" | "flagged" | "none";
-}): Promise<ClockedCall<CompareResponse>> {
-  return callClocked<CompareResponse>("compare", payload);
+export function compare(
+  payload: {
+    documents: { id: string; text: string }[];
+    instructions?: string;
+    kinds?: boolean;
+    evidence?: "all" | "flagged" | "none";
+  },
+  opts: CallOptions = {},
+): Promise<ClockedCall<CompareResponse>> {
+  return callClocked<CompareResponse>("compare", payload, opts);
 }
