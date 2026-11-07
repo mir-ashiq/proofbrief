@@ -7,9 +7,11 @@
 //   1. Rerank   — rank every registry passage against the question (shortlist)
 //   2. Verify   — judge each draft claim against the supplied documents
 //   3. Compare  — cross-check the source documents pairwise
-//   4. Rerank ×  — for claims Verify returned not_stated (max 3), a follow-up
-//                  lookup with the claim as query shows the nearest sources.
+//   4. Rerank ×  — follow-up lookups with the claim as query, for claims that
+//                  are not established or that returned no evidence quote.
 //                  Display-only enrichment: it never changes the review state.
+//   5. Join     — contradicted claims are linked to the opposing passage of the
+//                  Compare-flagged pair (both sides stay live endpoint outputs).
 
 import { NextRequest, NextResponse } from "next/server";
 import { getCase } from "@/lib/cases";
@@ -17,6 +19,7 @@ import { buildRegistry, toRerankDocuments, joinResultToPassage } from "@/lib/reg
 import { rerank, verify, compare, ClockedError, hasApiKey, type ClockedCall } from "@/lib/clocked";
 import {
   computeTriage,
+  findOpposingEvidence,
   RERANK_INSTRUCTIONS,
   VERIFY_INSTRUCTIONS,
   COMPARE_INSTRUCTIONS,
@@ -29,8 +32,10 @@ import {
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** How many not_stated claims get a nearest-source lookup (concurrency budget). */
-const MAX_CLOSEST_LOOKUPS = 3;
+/** How many claims get a nearest-source lookup (concurrency budget). */
+const MAX_CLOSEST_LOOKUPS = 4;
+/** Lookups run in waves of at most this size, after the core calls settle. */
+const LOOKUP_WAVE_SIZE = 3;
 
 function toError(e: unknown): { code: string; message: string } {
   if (e instanceof ClockedError) return { code: e.code, message: e.message };
@@ -167,20 +172,27 @@ export async function POST(req: NextRequest) {
     ]),
   ).sort((a, b) => a - b);
 
-  // ---- Stage 4: nearest-source lookups for not_stated claims (enrichment) ----
+  // ---- Stage 4: nearest-source lookups (display-only enrichment) ----
+  // Runs for claims Verify marked not_stated, and for counted claims that
+  // returned no evidence quote (e.g. supported without a passage), so a claim
+  // is never left with nothing to look at. It never replaces a Verify verdict
+  // and never changes the review state.
   const rawClaims = verifyResponse?.claims ?? [];
-  const notStated = rawClaims
-    .map((c, i) => ({ claim: c.claim, index: i }))
-    .filter(({ index }) => {
-      const c = rawClaims[index];
-      return c.counted !== false && c.verdict === "not_stated";
-    })
+  const lookupTargets = rawClaims
+    .map((c, i) => ({ claim: c.claim, index: i, verdict: c.verdict }))
+    .filter(
+      ({ index, verdict }) =>
+        rawClaims[index].counted !== false &&
+        verdict !== "not_a_claim" &&
+        (verdict === "not_stated" || !rawClaims[index].evidence),
+    )
     .slice(0, MAX_CLOSEST_LOOKUPS);
 
   const closestByIndex = new Map<number, JoinedRerankResult[]>();
-  if (notStated.length > 0) {
+  for (let w = 0; w < lookupTargets.length; w += LOOKUP_WAVE_SIZE) {
+    const wave = lookupTargets.slice(w, w + LOOKUP_WAVE_SIZE);
     const lookups = await Promise.allSettled(
-      notStated.map(({ claim }) =>
+      wave.map(({ claim }) =>
         rerank({
           query: claim,
           documents: rerankDocuments,
@@ -191,8 +203,10 @@ export async function POST(req: NextRequest) {
       ),
     );
     lookups.forEach((settled, j) => {
-      const { claim, index } = notStated[j];
+      const { claim, index, verdict } = wave[j];
+      const notEstablished = verdict === "not_stated";
       const short = claim.length > 90 ? claim.slice(0, 90) + "…" : claim;
+      const step = `Rerank — nearest sources for claim #${index + 1}`;
       if (settled.status === "fulfilled") {
         closestByIndex.set(
           index,
@@ -203,9 +217,11 @@ export async function POST(req: NextRequest) {
         );
         trace.push(
           traceEntry(
-            `Rerank — nearest sources for claim #${index + 1}`,
+            step,
             "POST /clocked/rerank",
-            `Not established by the sources; look up what they do say that comes closest: "${short}"`,
+            notEstablished
+              ? `Not established by the sources; look up what they do say that comes closest: "${short}"`
+              : `Verify returned no evidence quote; look up the most relevant source passage: "${short}"`,
             settled.value,
             undefined,
           ),
@@ -213,9 +229,11 @@ export async function POST(req: NextRequest) {
       } else {
         trace.push(
           traceEntry(
-            `Rerank — nearest sources for claim #${index + 1}`,
+            step,
             "POST /clocked/rerank",
-            `Not established by the sources; nearest-source lookup failed (enrichment only — the review state is unaffected).`,
+            notEstablished
+              ? `Not established by the sources; nearest-source lookup failed (enrichment only — the review state is unaffected).`
+              : `No evidence quote returned; nearest-source lookup failed (enrichment only — the review state is unaffected).`,
             null,
             toError(settled.reason),
           ),
@@ -224,9 +242,15 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // ---- Stage 5: join contradicted claims to the opposing side of a flagged pair ----
+  const docTitleMap = Object.fromEntries(demoCase.docs.map((d) => [d.id, d.title]));
   const enrichedClaims: EnrichedClaim[] = rawClaims.map((c, i) => ({
     ...c,
     closest: closestByIndex.get(i),
+    opposing:
+      verifyOk && compareOk
+        ? findOpposingEvidence(c, compareResponse?.pairs ?? [], allConflictIndexes, docTitleMap)
+        : undefined,
   }));
 
   const triage = computeTriage({

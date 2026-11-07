@@ -38,11 +38,26 @@ function buildMarkdown(demoCase: DemoCase, result: AnalysisResult): string {
     } else {
       lines.push(`Evidence: none returned (evidence is optional even when requested)`);
     }
-    if (c.verdict === "not_stated" && c.closest && c.closest.length > 0) {
-      lines.push(`Nearest sources (Clocked Rerank, enrichment only — these did not establish the claim):`);
+    if (c.closest && c.closest.length > 0) {
+      lines.push(
+        c.verdict === "not_stated"
+          ? `Nearest sources (Clocked Rerank, enrichment only — these did not establish the claim):`
+          : `Nearest sources by relevance (Clocked Rerank, display-only — Verify returned no evidence quote):`,
+      );
       c.closest.forEach((r) => {
         lines.push(`  - \`${r.passage?.id ?? r.index}\` ${r.action}${r.reason ? ` (${r.reason})` : ""} — “${(r.passage?.text ?? "").slice(0, 160)}”`);
       });
+    }
+    const opp = c.opposing;
+    if (opp) {
+      lines.push(`Opposing passage — from the flagged source pair (Clocked Compare, pair index ${opp.pairIndex}):`);
+      if (opp.quotes.length > 0) {
+        opp.quotes.forEach((q) => {
+          lines.push(`  - ${opp.docTitle} (${opp.docId}): “${q.quote}”`);
+        });
+      } else {
+        lines.push(`  - ${opp.docTitle} (${opp.docId}): flagged conflicting without a paired quote`);
+      }
     }
   });
   lines.push("");

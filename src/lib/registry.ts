@@ -80,3 +80,34 @@ export function joinResultToPassage(
   }
   return sentOrder[result.index];
 }
+
+/**
+ * Return the section (delimited by "## " headings) of `docText` that contains
+ * the given character range, or undefined when the range is not usable. Used
+ * to show the surrounding section when an endpoint returns only a short
+ * verbatim extraction — for example a bare section heading.
+ */
+export function sectionContextFor(
+  docText: string,
+  start?: number,
+  end?: number,
+): string | undefined {
+  if (
+    start === undefined ||
+    end === undefined ||
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end > docText.length ||
+    start > end
+  ) {
+    return undefined;
+  }
+  const headingStart = docText.lastIndexOf("## ", start);
+  const sectionStart = headingStart === -1 ? 0 : headingStart;
+  let sectionEnd = docText.indexOf("\n## ", Math.max(end, start));
+  if (sectionEnd === -1) sectionEnd = docText.length;
+  const context = docText.slice(sectionStart, sectionEnd).trim();
+  if (context.length === 0) return undefined;
+  return context.length > 900 ? context.slice(0, 900) + "…" : context;
+}

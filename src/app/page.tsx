@@ -42,6 +42,10 @@ export default function Home() {
     () => Object.fromEntries(demoCase.docs.map((d) => [d.id, d.title])),
     [demoCase],
   );
+  const docsById = useMemo(
+    () => Object.fromEntries(demoCase.docs.map((d) => [d.id, d])),
+    [demoCase],
+  );
 
   async function runAnalysis() {
     setLoading(true);
@@ -221,7 +225,7 @@ export default function Home() {
                 <TriageBanner triage={result.triage} />
                 <TraceCard trace={result.trace} />
                 <VerifyCard verify={result.verify} docTitles={docTitles} />
-                <CompareCard compare={result.compare} docTitles={docTitles} />
+                <CompareCard compare={result.compare} docTitles={docTitles} docs={docsById} />
                 <RerankCard rerank={result.rerank} />
                 <ExportBar demoCase={demoCase} result={result} />
               </>

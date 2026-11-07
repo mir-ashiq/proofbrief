@@ -49,6 +49,7 @@ export function VerifyCard({ verify, docTitles }: { verify: AnalysisResult["veri
         )}
         {verify.claims.map((c, i) => {
           const meta = claimVerdictMeta(c.verdict);
+          const opp = c.opposing;
           return (
             <article
               key={i}
@@ -83,10 +84,56 @@ export function VerifyCard({ verify, docTitles }: { verify: AnalysisResult["veri
                   requested; no passage is invented when one is absent.
                 </p>
               )}
-              {c.verdict === "not_stated" && c.closest && c.closest.length > 0 && (
-                <div className="mt-2 rounded-md border border-amber-200 bg-amber-50/60 p-2.5">
-                  <p className="mb-1.5 text-xs font-semibold text-amber-900">
-                    Nearest sources for this claim (Clocked Rerank) — what the documents do say:
+              {opp && (
+                <div className="mt-2 rounded-md border border-rose-200 bg-rose-50/60 p-2.5">
+                  <p className="mb-1.5 text-xs font-semibold text-rose-900">
+                    Opposing passage — from the flagged source pair (Clocked Compare, not Verify
+                    evidence):
+                  </p>
+                  {opp.quotes.length > 0 ? (
+                    <ul className="space-y-1.5">
+                      {opp.quotes.map((q, j) => (
+                        <li key={j} className="text-xs leading-relaxed text-foreground/85">
+                          “{q.quote}”
+                          <span className="text-muted-foreground">
+                            {" "}— {opp.docTitle} ({opp.docId})
+                            {q.start !== undefined && q.end !== undefined
+                              ? ` · chars ${q.start}–${q.end}`
+                              : ""}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs leading-relaxed text-foreground/80">
+                      {opp.docTitle} is flagged conflicting with the claim’s evidence document, but
+                      the pair came back without a paired quote. See the cross-check below.
+                    </p>
+                  )}
+                  <a
+                    href={`#compare-pair-${opp.pairIndex}`}
+                    className="mt-1.5 inline-block text-[10px] text-rose-800 underline decoration-dotted hover:text-rose-900"
+                  >
+                    See the full cross-check pair ↩
+                  </a>
+                </div>
+              )}
+              {c.closest && c.closest.length > 0 && (
+                <div
+                  className={`mt-2 rounded-md border p-2.5 ${
+                    c.verdict === "not_stated"
+                      ? "border-amber-200 bg-amber-50/60"
+                      : "border-teal-200 bg-teal-50/60"
+                  }`}
+                >
+                  <p
+                    className={`mb-1.5 text-xs font-semibold ${
+                      c.verdict === "not_stated" ? "text-amber-900" : "text-teal-900"
+                    }`}
+                  >
+                    {c.verdict === "not_stated"
+                      ? "Nearest sources for this claim (Clocked Rerank) — what the documents do say:"
+                      : "No evidence quote was returned. Nearest sources by relevance (Clocked Rerank):"}
                   </p>
                   <ul className="space-y-1.5">
                     {c.closest.map((r, j) => (
@@ -112,8 +159,9 @@ export function VerifyCard({ verify, docTitles }: { verify: AnalysisResult["veri
                     ))}
                   </ul>
                   <p className="mt-1.5 text-[10px] text-muted-foreground">
-                    Enrichment only: these passages did not establish the claim. They are the closest
-                    the supplied sources come to it, so a reviewer can see the gap.
+                    {c.verdict === "not_stated"
+                      ? "Enrichment only: these passages did not establish the claim. They are the closest the supplied sources come to it, so a reviewer can see the gap."
+                      : "Enrichment only: these passages are ranked by relevance to the claim. They are not Verify evidence, and they do not change the verdict or the review state."}
                   </p>
                 </div>
               )}

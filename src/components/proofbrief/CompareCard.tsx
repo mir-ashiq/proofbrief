@@ -1,6 +1,8 @@
 // ProofBrief — Compare results: pairwise relations between the source documents.
 
 import type { AnalysisResult } from "@/lib/analysis";
+import type { SourceDoc } from "@/lib/cases";
+import { sectionContextFor } from "@/lib/registry";
 import { compareRelationMeta, formatProb } from "@/lib/display";
 import { ScoreBar } from "./ScoreBar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,11 +12,20 @@ import { GitCompareArrows } from "lucide-react";
 export function CompareCard({
   compare,
   docTitles,
+  docs,
 }: {
   compare: AnalysisResult["compare"];
   docTitles: Record<string, string>;
+  docs: Record<string, SourceDoc>;
 }) {
   const titleFor = (id: string) => docTitles[id] ?? id;
+  // Endpoint quotes are verbatim extractions and can be as short as a heading;
+  // look up the surrounding source section by character offsets so a short
+  // extraction can be read in context. Uses only the supplied documents.
+  const contextFor = (docId: string | undefined, start?: number, end?: number) => {
+    if (!docId || !docs[docId]) return undefined;
+    return sectionContextFor(docs[docId].text, start, end);
+  };
   return (
     <Card>
       <CardHeader>
@@ -52,7 +63,8 @@ export function CompareCard({
           return (
             <article
               key={i}
-              className={`rounded-md border p-3 ${isConflict ? "border-rose-300 bg-rose-50/40" : "border-border bg-card"}`}
+              id={`compare-pair-${i}`}
+              className={`scroll-mt-4 rounded-md border p-3 ${isConflict ? "border-rose-300 bg-rose-50/40" : "border-border bg-card"}`}
               aria-label={`Pair ${titleFor(pair.a)} and ${titleFor(pair.b)}: ${meta.label}`}
             >
               <div className="flex flex-wrap items-center gap-2">
@@ -75,7 +87,10 @@ export function CompareCard({
               </div>
               {(pair.conflicts ?? []).length > 0 && (
                 <div className="mt-2 space-y-2" aria-label="Conflict findings">
-                  {(pair.conflicts ?? []).map((f, j) => (
+                  {(pair.conflicts ?? []).map((f, j) => {
+                    const aCtx = f.a ? contextFor(f.a.document, f.a.start, f.a.end) : undefined;
+                    const bCtx = f.b ? contextFor(f.b.document, f.b.start, f.b.end) : undefined;
+                    return (
                     <div key={j} className="rounded-md border border-rose-200 bg-rose-50 p-2.5">
                       <p className="mb-1.5 text-xs font-semibold text-rose-900">
                         Conflict finding {j + 1}
@@ -89,6 +104,16 @@ export function CompareCard({
                             <footer className="mt-1 text-muted-foreground">
                               {titleFor(f.a.document)} · chars {f.a.start}–{f.a.end}
                             </footer>
+                            {aCtx && aCtx.trim() !== f.a.quote.trim() && (
+                              <details className="mt-1.5">
+                                <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground hover:text-foreground">
+                                  Section context from {titleFor(f.a.document)}
+                                </summary>
+                                <p className="mt-1 whitespace-pre-wrap rounded bg-card/70 p-1.5 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                                  {aCtx}
+                                </p>
+                              </details>
+                            )}
                           </blockquote>
                         )}
                         {f.b && (
@@ -97,11 +122,22 @@ export function CompareCard({
                             <footer className="mt-1 text-muted-foreground">
                               {titleFor(f.b.document)} · chars {f.b.start}–{f.b.end}
                             </footer>
+                            {bCtx && bCtx.trim() !== f.b.quote.trim() && (
+                              <details className="mt-1.5">
+                                <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground hover:text-foreground">
+                                  Section context from {titleFor(f.b.document)}
+                                </summary>
+                                <p className="mt-1 whitespace-pre-wrap rounded bg-card/70 p-1.5 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                                  {bCtx}
+                                </p>
+                              </details>
+                            )}
                           </blockquote>
                         )}
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                   <p className="text-xs text-muted-foreground">
                     A human decides whether one document should be retired or the scope clarified.
                     ProofBrief blocks approval until then.

@@ -49,13 +49,37 @@ export interface JoinedRerankResult extends RerankResult {
   passage?: PassageEntry;
 }
 
+/** A verbatim quote from one side of a Compare finding. */
+export interface OpposingQuote {
+  quote: string;
+  start?: number;
+  end?: number;
+  confidence?: number;
+}
+
 /**
- * A Verify claim enriched with nearest-source passages for not_stated claims.
- * `closest` is display-only enrichment from Rerank; it never replaces the
- * Verify verdict and never changes the review state.
+ * The other side of a conflict: when Verify contradicts a claim whose evidence
+ * sits in one document of a Compare-flagged conflicting pair, this is the
+ * opposing document and its paired quotes from that pair. A display-only join
+ * between two live outputs; nothing is invented.
+ */
+export interface OpposingEvidence {
+  pairIndex: number;
+  relation: string;
+  docId: string;
+  docTitle: string;
+  quotes: OpposingQuote[];
+}
+
+/**
+ * A Verify claim enriched for display: nearest-source passages (Rerank) for
+ * claims that are not established or carry no evidence quote, and the opposing
+ * passage of a flagged pair (Compare) for contradicted claims. Both are
+ * display-only; neither replaces a Verify verdict or changes the review state.
  */
 export interface EnrichedClaim extends VerifyClaim {
   closest?: JoinedRerankResult[];
+  opposing?: OpposingEvidence;
 }
 
 export interface TriageStateInfo {
@@ -176,4 +200,54 @@ export function computeTriage(input: {
     state: "ready_for_review",
     reasons: ["Every counted claim is supported by these documents and no source pair is flagged conflicting. A human makes the final call."],
   };
+}
+
+/**
+ * Join a contradicted claim to the opposing side of a Compare-flagged
+ * conflicting pair. Only live outputs are used: the claim's evidence document
+ * anchors the join, and the quotes come from the pair's own findings. When the
+ * claim carries no evidence document, the first flagged pair's second document
+ * is treated as the opposing side. Returns undefined when nothing honest can
+ * be joined — this never fabricates a passage.
+ */
+export function findOpposingEvidence(
+  claim: VerifyClaim,
+  pairs: ComparePair[],
+  conflictIndexes: number[],
+  docTitles: Record<string, string>,
+): OpposingEvidence | undefined {
+  if (claim.verdict !== "contradicted") return undefined;
+  const evidenceDoc = claim.evidence?.document ?? null;
+  for (const idx of conflictIndexes) {
+    const pair = pairs[idx];
+    if (!pair) continue;
+    let opposingDocId: string | undefined;
+    let side: "a" | "b" | undefined;
+    if (evidenceDoc && pair.a === evidenceDoc && pair.b !== evidenceDoc) {
+      opposingDocId = pair.b;
+      side = "b";
+    } else if (evidenceDoc && pair.b === evidenceDoc && pair.a !== evidenceDoc) {
+      opposingDocId = pair.a;
+      side = "a";
+    } else if (!evidenceDoc) {
+      opposingDocId = pair.b ?? pair.a;
+      side = pair.b ? "b" : "a";
+    }
+    if (!opposingDocId || !side) continue;
+    const sideKey = side;
+    const quotes: OpposingQuote[] = (pair.conflicts ?? [])
+      .map((f) => f?.[sideKey])
+      .filter((q): q is { document: string; quote: string; start: number; end: number; confidence?: number } =>
+        Boolean(q && q.quote),
+      )
+      .map((q) => ({ quote: q.quote, start: q.start, end: q.end, confidence: q.confidence }));
+    return {
+      pairIndex: idx,
+      relation: pair.relation,
+      docId: opposingDocId,
+      docTitle: docTitles[opposingDocId] ?? opposingDocId,
+      quotes,
+    };
+  }
+  return undefined;
 }
