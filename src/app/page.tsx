@@ -195,6 +195,14 @@ export default function Home() {
                         This screen intentionally shows the error instead of faking endpoint output.
                       </span>
                     </>
+                  ) : error.code === "busy" ? (
+                    <>
+                      {error.message}{" "}
+                      <span className="font-medium">
+                        Analysis incomplete — retry later. This is not a source conflict and not a
+                        verdict on the draft.
+                      </span>
+                    </>
                   ) : (
                     <>
                       {error.code}: {error.message}

@@ -38,8 +38,13 @@ check(
   crossCheck,
 );
 check(
-  "raw heading kept only inside the attribution note",
-  crossCheck.includes('endpoint extraction was the section heading only (“## Audit log retention”)'),
+  "raw heading kept only inside the attribution note, with its raw-extraction offsets",
+  crossCheck.includes('endpoint extraction was the section heading only (“## Audit log retention”, chars 186–208)'),
+  crossCheck,
+);
+check(
+  "offsets do not sit next to the displayed full section",
+  !crossCheck.includes("chars 186–208: “"),
   crossCheck,
 );
 check(

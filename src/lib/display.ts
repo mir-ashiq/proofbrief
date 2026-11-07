@@ -103,9 +103,16 @@ export const TRIAGE_META: Record<
   },
   review_required: {
     title: "Review required",
-    blurb: "An endpoint error or unusable result means this draft cannot be cleared automatically.",
+    blurb: "An endpoint error, an unusable result, or an unanswered question means this draft cannot be cleared automatically.",
     container: "border-slate-300 bg-slate-100",
     badge: "border-slate-400 bg-slate-100 text-slate-900",
+  },
+  analysis_incomplete: {
+    title: "Analysis incomplete — retry later",
+    blurb:
+      "A Clocked endpoint was rate-limited or temporarily unavailable. Nothing was approved or cleared. This is not a source conflict and not a verdict — run the check again in a few moments.",
+    container: "border-sky-300 bg-sky-50",
+    badge: "border-sky-400 bg-sky-100 text-sky-900",
   },
 };
 

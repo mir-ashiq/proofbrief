@@ -32,12 +32,13 @@ function SideQuotes({ side }: { side: PairSide }) {
           “{q.quote}”
           <span className="text-muted-foreground">
             {" "}— {side.docTitle} ({side.docId})
-            {q.start !== undefined && q.end !== undefined ? ` · chars ${q.start}–${q.end}` : ""}
+            {!q.expanded && q.start !== undefined && q.end !== undefined ? ` · chars ${q.start}–${q.end}` : ""}
           </span>
           {q.expanded && (
             <span className="block text-[10px] text-muted-foreground">
-              Endpoint extraction was the section heading only: “{q.raw}” — the passage above is
-              its full section from the source document.
+              Endpoint extraction was the section heading only: “{q.raw}”
+              {q.start !== undefined && q.end !== undefined ? ` (chars ${q.start}–${q.end})` : ""} —
+              the passage above is its full section from the source document.
             </span>
           )}
         </li>
@@ -180,8 +181,8 @@ export function VerifyCard({ verify, docTitles }: { verify: AnalysisResult["veri
               ) : closestUse && closestUse.passage ? (
                 <blockquote className="mt-2 border-l-2 border-teal-300 bg-teal-50/50 pl-3 text-sm leading-relaxed text-foreground/85">
                   <p className="mb-1 text-[11px] font-medium text-teal-900">
-                    Closest source passage (Clocked Rerank — Verify returned no evidence quote for
-                    this claim):
+                    No direct Verify evidence was returned for this claim. Closest source passage
+                    (Clocked Rerank relevance match — enrichment, not proof):
                   </p>
                   “{stripHeadingLine(closestUse.passage.text).trim()}”
                   <footer className="mt-1 text-xs text-muted-foreground">

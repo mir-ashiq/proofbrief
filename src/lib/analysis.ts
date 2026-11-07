@@ -110,7 +110,8 @@ export interface TriageStateInfo {
     | "ready_for_review"
     | "conflict_needs_decision"
     | "missing_evidence"
-    | "review_required";
+    | "review_required"
+    | "analysis_incomplete";
   reasons: string[];
 }
 
@@ -147,12 +148,37 @@ export interface AnalysisResult {
 /**
  * Compute the review state from live endpoint outputs.
  *
- * - Any endpoint error, or no usable Rerank passage, => review_required.
+ * - A retryable endpoint failure (429 / 5xx / network) => analysis_incomplete:
+ *   fail closed, labeled "retry later", clearly NOT a source conflict.
+ * - Any other endpoint error, invalid response, no usable Rerank passage, or
+ *   a missing answers_question score => review_required (fail closed).
  * - A Compare pair flagged conflicting, or a Verify claim contradicted,
  *   => conflict_needs_decision (approval is blocked).
+ * - Verify's answers_question below threshold => review_required: the claims
+ *   may be grounded, but the draft may not answer the customer's question —
+ *   grounding and relevance are separate signals.
  * - Any counted claim not established by the sources => missing_evidence.
  * - Otherwise => ready_for_review (a human still makes the final call).
  */
+
+/**
+ * Verify's answers_question is a 0–1 probability that the draft addresses the
+ * supplied question. Grounding and relevance are separate: a draft can be
+ * fully supported by the sources and still answer the wrong question. The
+ * cutoff mirrors the platform's own default grounding threshold (0.5).
+ */
+export const ANSWERS_QUESTION_THRESHOLD = 0.5;
+
+/** Error codes where retrying the same logical request could still succeed. */
+export function isRetryableError(err: { code: string }): boolean {
+  return (
+    err.code === "http_429" ||
+    err.code === "network" ||
+    err.code === "timeout" ||
+    /^http_5\d\d$/.test(err.code)
+  );
+}
+
 export function computeTriage(input: {
   rerankOk: boolean;
   rerankError?: { code: string; message: string };
@@ -160,6 +186,8 @@ export function computeTriage(input: {
   verifyOk: boolean;
   verifyError?: { code: string; message: string };
   claims: VerifyClaim[];
+  /** Verify's answers_question score, when returned (0–1). */
+  answersQuestion?: number;
   compareOk: boolean;
   compareError?: { code: string; message: string };
   pairs: ComparePair[];
@@ -172,14 +200,36 @@ export function computeTriage(input: {
     [input.verifyOk, input.verifyError, "Verify"],
     [input.compareOk, input.compareError, "Compare"],
   ];
+  const endpointErrors: string[] = [];
+  let anyRetryable = false;
   for (const [ok, err, name] of errors) {
-    if (!ok && err) reasons.push(`${name} could not complete (${err.code}): ${err.message}`);
+    if (!ok && err) {
+      endpointErrors.push(`${name} could not complete (${err.code}): ${err.message}`);
+      if (isRetryableError(err)) anyRetryable = true;
+    }
   }
-  if (reasons.length > 0) {
-    return { state: "review_required", reasons };
+  if (endpointErrors.length > 0) {
+    if (anyRetryable) {
+      // Rate-limited or transiently unavailable: nothing was approved, and
+      // this is explicitly NOT a source conflict — retrying may complete the
+      // analysis. Kept visually separate from every verdict state.
+      return {
+        state: "analysis_incomplete",
+        reasons: [
+          "Analysis incomplete — retry later. A Clocked endpoint was rate-limited or temporarily unavailable, so no verdict can be shown for this draft.",
+          ...endpointErrors,
+          "This is not a source conflict and not a verdict on the draft: an endpoint call did not complete. Run the check again in a few moments.",
+        ],
+      };
+    }
+    return { state: "review_required", reasons: endpointErrors };
   }
 
-  const useCount = input.rerankResults.filter((r) => r.action === "use").length;
+  // A `use` result only counts as a usable passage when it actually joins
+  // back to a registry passage (by id, falling back to index). A result that
+  // references an unknown passage id or an out-of-range index cannot be
+  // shown to a reviewer, so it must not count as a source basis.
+  const useCount = input.rerankResults.filter((r) => r.action === "use" && r.passage).length;
   const noUsablePassage = useCount === 0;
   if (noUsablePassage) {
     reasons.push("Rerank marked no passage as usable for this question, so there is no source basis to check the draft against.");
@@ -202,6 +252,23 @@ export function computeTriage(input: {
   }
   if (conflicts.length > 0 || contradicted.length > 0) {
     return { state: "conflict_needs_decision", reasons: [...conflicts, ...reasons] };
+  }
+
+  // Grounding and relevance are separate signals: every claim can be supported
+  // by the sources while the draft as a whole answers a different question.
+  // Such a draft must never read as "ready"; route it to a human with the
+  // relevance score in hand. A missing score fails closed the same way.
+  if (input.answersQuestion === undefined) {
+    reasons.push(
+      "Verify returned no answers_question score for this draft, so the app cannot confirm the draft addresses the customer's question. Failing closed: a human must check.",
+    );
+    return { state: "review_required", reasons };
+  }
+  if (input.answersQuestion < ANSWERS_QUESTION_THRESHOLD) {
+    reasons.push(
+      `Verify's answers_question score is ${input.answersQuestion.toFixed(2)} (below ${ANSWERS_QUESTION_THRESHOLD}): the draft's claims may be grounded in the sources, but the draft may not answer the customer's actual question. A human must decide whether the reply should be rewritten.`,
+    );
+    return { state: "review_required", reasons };
   }
 
   const notStated = input.claims.filter(

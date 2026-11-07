@@ -114,23 +114,28 @@ export function CompareCard({
                           <blockquote className="border-l-2 border-rose-300 pl-3 text-xs leading-relaxed text-foreground/85">
                             “{aRes.display}”
                             <footer className="mt-1 text-muted-foreground">
-                              {titleFor(f.a.document)} · chars {f.a.start}–{f.a.end}
+                              {titleFor(f.a.document)}
+                              {!aRes.expanded && ` · chars ${f.a.start}–${f.a.end}`}
                             </footer>
-                            {aRes.expanded && (
+                            {aRes.expanded ? (
                               <p className="mt-1 text-[10px] text-muted-foreground">
-                                Endpoint extraction was the section heading only: “{aRes.raw}” — the
-                                passage above is its full section from the source document.
+                                Endpoint extraction was the section heading only: “{aRes.raw}” (chars
+                                {" "}
+                                {f.a.start}–{f.a.end}) — the passage above is its full section from
+                                the source document.
                               </p>
-                            )}
-                            {!aRes.expanded && aCtx && aCtx.trim() !== f.a.quote.trim() && (
-                              <details className="mt-1.5">
-                                <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground hover:text-foreground">
-                                  Section context from {titleFor(f.a.document)}
-                                </summary>
-                                <p className="mt-1 whitespace-pre-wrap rounded bg-card/70 p-1.5 font-mono text-[10px] leading-relaxed text-muted-foreground">
-                                  {aCtx}
-                                </p>
-                              </details>
+                            ) : (
+                              aCtx &&
+                              aCtx.trim() !== f.a.quote.trim() && (
+                                <details className="mt-1.5">
+                                  <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground hover:text-foreground">
+                                    Section context from {titleFor(f.a.document)}
+                                  </summary>
+                                  <p className="mt-1 whitespace-pre-wrap rounded bg-card/70 p-1.5 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                                    {aCtx}
+                                  </p>
+                                </details>
+                              )
                             )}
                           </blockquote>
                         )}
@@ -138,23 +143,28 @@ export function CompareCard({
                           <blockquote className="border-l-2 border-rose-300 pl-3 text-xs leading-relaxed text-foreground/85">
                             “{bRes.display}”
                             <footer className="mt-1 text-muted-foreground">
-                              {titleFor(f.b.document)} · chars {f.b.start}–{f.b.end}
+                              {titleFor(f.b.document)}
+                              {!bRes.expanded && ` · chars ${f.b.start}–${f.b.end}`}
                             </footer>
-                            {bRes.expanded && (
+                            {bRes.expanded ? (
                               <p className="mt-1 text-[10px] text-muted-foreground">
-                                Endpoint extraction was the section heading only: “{bRes.raw}” — the
-                                passage above is its full section from the source document.
+                                Endpoint extraction was the section heading only: “{bRes.raw}” (chars
+                                {" "}
+                                {f.b.start}–{f.b.end}) — the passage above is its full section from
+                                the source document.
                               </p>
-                            )}
-                            {!bRes.expanded && bCtx && bCtx.trim() !== f.b.quote.trim() && (
-                              <details className="mt-1.5">
-                                <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground hover:text-foreground">
-                                  Section context from {titleFor(f.b.document)}
-                                </summary>
-                                <p className="mt-1 whitespace-pre-wrap rounded bg-card/70 p-1.5 font-mono text-[10px] leading-relaxed text-muted-foreground">
-                                  {bCtx}
-                                </p>
-                              </details>
+                            ) : (
+                              bCtx &&
+                              bCtx.trim() !== f.b.quote.trim() && (
+                                <details className="mt-1.5">
+                                  <summary className="cursor-pointer text-[10px] font-medium text-muted-foreground hover:text-foreground">
+                                    Section context from {titleFor(f.b.document)}
+                                  </summary>
+                                  <p className="mt-1 whitespace-pre-wrap rounded bg-card/70 p-1.5 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                                    {bCtx}
+                                  </p>
+                                </details>
+                              )
                             )}
                           </blockquote>
                         )}

@@ -4,19 +4,41 @@
 // server-side; nothing on this path is ever faked.
 //
 // Pipeline:
+//   0. Guard    — one analysis at a time per instance (a run fires 3 core
+//                 calls in parallel; Clocked's build tier allows 4 concurrent
+//                 requests), plus a short per-IP cooldown. Over the cap the
+//                 route answers 429 "busy" so the client can retry, matching
+//                 the platform's limits guidance: wait, never parallelize.
 //   1. Rerank   — rank every registry passage against the question (shortlist)
 //   2. Verify   — judge each draft claim against the supplied documents
 //   3. Compare  — cross-check the source documents pairwise
-//   4. Rerank ×  — follow-up lookups with the claim as query, for claims that
+//   4. Validate — every response is checked against the documented shape
+//                 (enum allowlists, 0–1 scores, integer offsets). Anything
+//                 unexpected fails closed: the endpoint counts as not-ok and
+//                 the review state can never be "ready" from that output.
+//   5. Rerank × — follow-up lookups with the claim as query, for claims that
 //                  are not established or that returned no evidence quote.
 //                  Display-only enrichment: it never changes the review state.
-//   5. Join     — contradicted claims are linked to the opposing passage of the
+//   6. Join     — contradicted claims are linked to the opposing passage of the
 //                  Compare-flagged pair (both sides stay live endpoint outputs).
 
 import { NextRequest, NextResponse } from "next/server";
 import { getCase } from "@/lib/cases";
 import { buildRegistry, toRerankDocuments, joinResultToPassage } from "@/lib/registry";
-import { rerank, verify, compare, ClockedError, hasApiKey, type ClockedCall } from "@/lib/clocked";
+import {
+  rerank,
+  verify,
+  compare,
+  ClockedError,
+  hasApiKey,
+  type ClockedCall,
+} from "@/lib/clocked";
+import {
+  validateRerankResponse,
+  validateVerifyResponse,
+  validateCompareResponse,
+  type ValidationResult,
+} from "@/lib/validate";
 import {
   computeTriage,
   findOpposingEvidence,
@@ -31,11 +53,33 @@ import {
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+/** A run with retries can take a while; allow the function time to finish cleanly. */
+export const maxDuration = 60;
 
 /** How many claims get a nearest-source lookup (concurrency budget). */
 const MAX_CLOSEST_LOOKUPS = 4;
 /** Lookups run in waves of at most this size, after the core calls settle. */
 const LOOKUP_WAVE_SIZE = 3;
+
+// ---- Concurrency / rate guard (best-effort, per serverless instance) ----
+//
+// One analysis at a time: the three core calls run in parallel, so a single
+// analysis already uses 3 of the 4 concurrent requests the Clocked build tier
+// allows. Two overlapping analyses would trip the platform's 429 throttling
+// (observed once during concurrent rechecks on 2026-11-07). Module state is
+// per-instance on serverless — a hard cap would need durable storage; for
+// this demo the guard plus client-side retry keeps a lone reviewer smooth,
+// and a 429 from us or from Clocked both land in the same
+// "analysis incomplete — retry later" state, never a false verdict.
+
+let analysesInFlight = 0;
+const MAX_CONCURRENT_ANALYSES = 1;
+const lastStartedByIp = new Map<string, number>();
+const IP_COOLDOWN_MS = 4000;
+
+function clientIp(req: NextRequest): string {
+  return req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
+}
 
 function toError(e: unknown): { code: string; message: string } {
   if (e instanceof ClockedError) return { code: e.code, message: e.message };
@@ -66,6 +110,42 @@ function traceEntry(
   };
 }
 
+/**
+ * Outcome of one core endpoint call: HTTP result (if any) plus runtime
+ * validation. A response that does not match the documented shape makes the
+ * outcome not-ok with code "invalid_response" — the raw output is never used.
+ */
+type Outcome<T> = {
+  ok: boolean;
+  error?: { code: string; message: string };
+  call: ClockedCall<T> | null;
+  data: T | null;
+};
+
+function toOutcome<T>(
+  settled: PromiseSettledResult<ClockedCall<T>>,
+  validate: (data: unknown) => ValidationResult,
+  name: string,
+): Outcome<T> {
+  if (settled.status === "rejected") {
+    return { ok: false, error: toError(settled.reason), call: null, data: null };
+  }
+  const call = settled.value;
+  const validation = validate(call.data);
+  if (!validation.ok) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_response",
+        message: `${name} response failed validation (${validation.message}); failing closed instead of displaying an ununderstood output.`,
+      },
+      call,
+      data: null,
+    };
+  }
+  return { ok: true, call, data: call.data };
+}
+
 export async function POST(req: NextRequest) {
   let caseId = "";
   try {
@@ -91,6 +171,31 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // Concurrency guard: one analysis at a time per instance, with a short
+  // per-IP cooldown. Answer 429 "busy" so the client retries in a moment.
+  const ip = clientIp(req);
+  const now = Date.now();
+  const lastForIp = lastStartedByIp.get(ip);
+  if (analysesInFlight >= MAX_CONCURRENT_ANALYSES || (lastForIp !== undefined && now - lastForIp < IP_COOLDOWN_MS)) {
+    return NextResponse.json(
+      {
+        error: "busy",
+        message:
+          "Another evidence check is still running — this demo runs one analysis at a time to stay inside Clocked's concurrency limits. Wait a few seconds and run the check again. This is not a source conflict.",
+      },
+      { status: 429 },
+    );
+  }
+  analysesInFlight += 1;
+  lastStartedByIp.set(ip, now);
+  try {
+    return await runAnalysis(demoCase);
+  } finally {
+    analysesInFlight -= 1;
+  }
+}
+
+async function runAnalysis(demoCase: NonNullable<ReturnType<typeof getCase>>): Promise<NextResponse> {
   // Registry: passages with ids and offsets, built before any call is made.
   const registry = buildRegistry(demoCase.docs);
   const sentOrder = registry;
@@ -120,38 +225,43 @@ export async function POST(req: NextRequest) {
     }),
   ]);
 
+  // ---- Stage 4: runtime validation of every response (fail closed) ----
+  const rerankOutcome = toOutcome(rerankSettled, validateRerankResponse, "Rerank");
+  const verifyOutcome = toOutcome(verifySettled, validateVerifyResponse, "Verify");
+  const compareOutcome = toOutcome(compareSettled, validateCompareResponse, "Compare");
+
   // Endpoint trace, in pipeline order.
   const trace: TraceEntry[] = [
     traceEntry(
       "Rerank — passage selection",
       "POST /clocked/rerank",
       "Read every source passage against the question and rank what can support an answer.",
-      rerankSettled.status === "fulfilled" ? rerankSettled.value : null,
-      rerankSettled.status === "rejected" ? toError(rerankSettled.reason) : undefined,
+      rerankOutcome.call,
+      rerankOutcome.error,
     ),
     traceEntry(
       "Verify — claim grounding",
       "POST /clocked/grounding",
       "Judge each claim of the draft strictly against the supplied documents.",
-      verifySettled.status === "fulfilled" ? verifySettled.value : null,
-      verifySettled.status === "rejected" ? toError(verifySettled.reason) : undefined,
+      verifyOutcome.call,
+      verifyOutcome.error,
     ),
     traceEntry(
       "Compare — source cross-check",
       "POST /clocked/compare",
       "Cross-check the source documents pairwise for conflicts and overlaps.",
-      compareSettled.status === "fulfilled" ? compareSettled.value : null,
-      compareSettled.status === "rejected" ? toError(compareSettled.reason) : undefined,
+      compareOutcome.call,
+      compareOutcome.error,
     ),
   ];
 
-  const rerankOk = rerankSettled.status === "fulfilled";
-  const verifyOk = verifySettled.status === "fulfilled";
-  const compareOk = compareSettled.status === "fulfilled";
+  const rerankOk = rerankOutcome.ok;
+  const verifyOk = verifyOutcome.ok;
+  const compareOk = compareOutcome.ok;
 
-  const rerankResponse = rerankOk ? rerankSettled.value.data : null;
-  const verifyResponse = verifyOk ? verifySettled.value.data : null;
-  const compareResponse = compareOk ? compareSettled.value.data : null;
+  const rerankResponse = rerankOutcome.data;
+  const verifyResponse = verifyOutcome.data;
+  const compareResponse = compareOutcome.data;
 
   // Join Rerank results back to the registry by id (fallback: index).
   const joinedResults: JoinedRerankResult[] = (rerankResponse?.results ?? []).map((r) => ({
@@ -172,7 +282,7 @@ export async function POST(req: NextRequest) {
     ]),
   ).sort((a, b) => a - b);
 
-  // ---- Stage 4: nearest-source lookups (display-only enrichment) ----
+  // ---- Stage 5: nearest-source lookups (display-only enrichment) ----
   // Runs for claims Verify marked not_stated, and for counted claims that
   // returned no evidence quote (e.g. supported without a passage), so a claim
   // is never left with nothing to look at. It never replaces a Verify verdict
@@ -207,10 +317,11 @@ export async function POST(req: NextRequest) {
       const notEstablished = verdict === "not_stated";
       const short = claim.length > 90 ? claim.slice(0, 90) + "…" : claim;
       const step = `Rerank — nearest sources for claim #${index + 1}`;
-      if (settled.status === "fulfilled") {
+      const outcome = toOutcome(settled, validateRerankResponse, "Rerank");
+      if (outcome.ok && outcome.data) {
         closestByIndex.set(
           index,
-          settled.value.data.results.map((r) => ({
+          outcome.data.results.map((r) => ({
             ...r,
             passage: joinResultToPassage(r, registry, sentOrder),
           })),
@@ -222,7 +333,7 @@ export async function POST(req: NextRequest) {
             notEstablished
               ? `Not established by the sources; look up what they do say that comes closest: "${short}"`
               : `Verify returned no evidence quote; look up the most relevant source passage: "${short}"`,
-            settled.value,
+            outcome.call,
             undefined,
           ),
         );
@@ -234,15 +345,15 @@ export async function POST(req: NextRequest) {
             notEstablished
               ? `Not established by the sources; nearest-source lookup failed (enrichment only — the review state is unaffected).`
               : `No evidence quote returned; nearest-source lookup failed (enrichment only — the review state is unaffected).`,
-            null,
-            toError(settled.reason),
+            outcome.call,
+            outcome.error,
           ),
         );
       }
     });
   }
 
-  // ---- Stage 5: join contradicted claims to the opposing side of a flagged pair ----
+  // ---- Stage 6: join contradicted claims to the opposing side of a flagged pair ----
   // Which side of a flagged pair opposes the claim is decided by wording
   // (claim text vs. each side's passages), so the join cannot flip when Verify
   // happens to cite either passage as evidence. Display-only.
@@ -260,13 +371,16 @@ export async function POST(req: NextRequest) {
 
   const triage = computeTriage({
     rerankOk,
-    rerankError: rerankOk ? undefined : toError(rerankSettled.reason),
+    rerankError: rerankOutcome.error,
     rerankResults: joinedResults,
     verifyOk,
-    verifyError: verifyOk ? undefined : toError(verifySettled.reason),
+    verifyError: verifyOutcome.error,
     claims: enrichedClaims,
+    // Relevance gate: grounding (per-claim support) and answers_question
+    // (does the draft address the question) are separate Verify signals.
+    answersQuestion: verifyResponse?.answers_question,
     compareOk,
-    compareError: compareOk ? undefined : toError(compareSettled.reason),
+    compareError: compareOutcome.error,
     pairs: compareResponse?.pairs ?? [],
     conflictIndexes: allConflictIndexes,
   });
@@ -278,13 +392,13 @@ export async function POST(req: NextRequest) {
     trace,
     rerank: {
       ok: rerankOk,
-      error: rerankOk ? undefined : toError(rerankSettled.reason),
+      error: rerankOutcome.error,
       model: rerankResponse?.model,
       results: joinedResults,
     },
     verify: {
       ok: verifyOk,
-      error: verifyOk ? undefined : toError(verifySettled.reason),
+      error: verifyOutcome.error,
       model: verifyResponse?.model,
       grounded: verifyResponse?.grounded,
       threshold: verifyResponse?.threshold,
@@ -293,7 +407,7 @@ export async function POST(req: NextRequest) {
     },
     compare: {
       ok: compareOk,
-      error: compareOk ? undefined : toError(compareSettled.reason),
+      error: compareOutcome.error,
       model: compareResponse?.model,
       verdict: compareResponse?.verdict,
       pairs: compareResponse?.pairs ?? [],

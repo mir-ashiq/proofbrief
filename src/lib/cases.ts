@@ -208,6 +208,55 @@ Restoration from backup is tested quarterly, and results are recorded in the ris
       compare: "Desired: no conflicting pair, because the differing numbers describe different data types. Fallback: if flagged, the pair routes to human resolution.",
     },
   },
+  {
+    id: "wrong-question",
+    name: "Accurate but off-topic",
+    scenario:
+      "Every claim is supported by the sources, but the draft does not answer the customer's question.",
+    question:
+      "Acme Retail is evaluating your platform. How long does Northwind retain customer audit logs, and what happens at the end of the retention period?",
+    draft:
+      "Access to customer data requires role-based permissions assigned by the account owner, and permission sets are reviewed quarterly by the Northwind security team. Customer data in transit is protected with TLS 1.3 or higher on all public interfaces.",
+    docs: [
+      {
+        id: "doc-sp21",
+        title: "Security Policy v2.1",
+        text: `## Access to customer data
+Access to customer data requires role-based permissions assigned by the account owner. Permission sets are reviewed quarterly by the Northwind security team.
+
+## Audit log retention
+Northwind retains customer audit logs for 12 months from the date of record. At the end of the retention period, audit logs are automatically and permanently deleted from all production and backup systems.
+
+## Incident response
+Suspected security incidents must be reported to security@northwind.example within 24 hours of detection. The on-call security lead triages all reports.`,
+      },
+      {
+        id: "doc-dhs13",
+        title: "Data Handling Standard v1.3",
+        text: `## Data in transit
+Customer data in transit is protected with TLS 1.3 or higher on all public interfaces.
+
+## Retention of audit records
+Audit log records are retained for 12 months, then purged automatically. During the retention period, access to audit logs is restricted to the Northwind security team.
+
+## Backup archives
+Full backup archives are retained for 7 years to support disaster recovery and legal holds.`,
+      },
+    ],
+    context: {
+      customer: "Acme Retail Ltd",
+      plan: "Northwind Cloud Platform, Standard plan",
+      region: "EU (eu-west-1)",
+      deployment: "Multi-tenant SaaS",
+    },
+    purpose:
+      "Relevance gate: grounding and answers_question are separate Verify signals. Every claim here is supported by the documents — nothing is contradicted, nothing is missing — yet the draft talks about access permissions and transport encryption while the customer asked about audit-log retention. It must never read as ready for review; Verify's answers_question score routes it to a human.",
+    expected: {
+      rerank: "Retention passages rank as use for the question even though the draft never mentions retention.",
+      verify: "Both claims supported by these documents; answers_question low — the draft does not address the question.",
+      compare: "Documents relate on retention; no conflicting pair, so the review state comes from the relevance gate, not from a conflict.",
+    },
+  },
 ];
 
 export function getCase(id: string): DemoCase | undefined {

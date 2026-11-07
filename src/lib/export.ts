@@ -55,7 +55,7 @@ export function buildMarkdown(demoCase: DemoCase, result: AnalysisResult): strin
           : undefined;
       if (topUse?.passage) {
         lines.push(
-          `Closest source passage (Clocked Rerank, enrichment only — Verify returned no evidence quote; relevance ${(topUse.relevance_score * 100).toFixed(0)}%): “${topUse.passage.text}” — ${topUse.passage.docTitle}, section “${topUse.passage.section}”`,
+          `No direct Verify evidence was returned for this claim. Closest source passage (Clocked Rerank relevance match — enrichment, not proof; relevance ${(topUse.relevance_score * 100).toFixed(0)}%): “${topUse.passage.text}” — ${topUse.passage.docTitle}, section “${topUse.passage.section}”`,
         );
       }
       lines.push(
@@ -77,7 +77,7 @@ export function buildMarkdown(demoCase: DemoCase, result: AnalysisResult): strin
         if (opposing.quotes.length > 0) {
           opposing.quotes.forEach((q) => {
             lines.push(
-              `  - ${opposing.docTitle} (${opposing.docId}): “${q.quote}”${q.expanded ? ` — endpoint extraction was the section heading only (“${q.raw}”); the full section is shown` : ""}`,
+              `  - ${opposing.docTitle} (${opposing.docId}): “${q.quote}”${q.expanded ? ` — endpoint extraction was the section heading only (“${q.raw}”${q.start !== undefined && q.end !== undefined ? `, chars ${q.start}–${q.end}` : ""}); the full section is shown` : ""}`,
             );
           });
         } else {
@@ -116,12 +116,19 @@ export function buildMarkdown(demoCase: DemoCase, result: AnalysisResult): strin
         if (!loc) return;
         const doc = docsById.get(loc.document);
         const resolved = resolveQuote(doc?.text, loc.quote, loc.start, loc.end);
-        lines.push(
-          `    - ${doc?.title ?? loc.document} (${loc.document}), chars ${loc.start}–${loc.end}: “${resolved.display}”` +
-            (resolved.expanded
-              ? ` — endpoint extraction was the section heading only (“${resolved.raw}”); the full section is shown`
-              : ""),
-        );
+        if (resolved.expanded) {
+          // Offsets belong to the endpoint's raw extraction (which was only a
+          // heading), not to the full section shown — so they travel with the
+          // raw-extraction note, never next to the displayed section text.
+          lines.push(`    - ${doc?.title ?? loc.document} (${loc.document}): “${resolved.display}”`);
+          lines.push(
+            `      — endpoint extraction was the section heading only (“${resolved.raw}”${loc.start !== undefined && loc.end !== undefined ? `, chars ${loc.start}–${loc.end}` : ""}); the full section is shown above`,
+          );
+        } else {
+          lines.push(
+            `    - ${doc?.title ?? loc.document} (${loc.document}), chars ${loc.start}–${loc.end}: “${resolved.display}”`,
+          );
+        }
       };
       side(f.a);
       side(f.b);

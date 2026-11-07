@@ -2,10 +2,8 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  /* config options here */
-  typescript: {
-    ignoreBuildErrors: true,
-  },
+  // TypeScript errors fail the build (no ignoreBuildErrors bypass); a separate
+  // `bunx tsc --noEmit` also runs in development. See README for the checks.
   reactStrictMode: false,
 };
 

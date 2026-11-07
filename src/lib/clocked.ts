@@ -11,14 +11,33 @@ export class ClockedError extends Error {
   code: string;
   status: number;
   detail?: string;
+  /** Server-provided wait hint (ms) from a Retry-After header, when present. */
+  retryAfterMs?: number;
 
-  constructor(code: string, message: string, status = 0, detail?: string) {
+  constructor(code: string, message: string, status = 0, detail?: string, retryAfterMs?: number) {
     super(message);
     this.name = "ClockedError";
     this.code = code;
     this.status = status;
     this.detail = detail;
+    this.retryAfterMs = retryAfterMs;
   }
+}
+
+/** True when retrying the same logical request could still succeed. */
+export function isRetryable(err: unknown): boolean {
+  if (err instanceof ClockedError) {
+    // 429 = wait (the platform's throttling signal); 5xx = transient server
+    // state. Other 4xx (bad request, auth, unprocessable) will not change on
+    // retry and must surface immediately.
+    return err.status === 429 || err.status >= 500;
+  }
+  return true; // network / timeout errors
+}
+
+/** Error class that means "wait and retry, do not parallelize". */
+export function isThrottled(err: unknown): boolean {
+  return err instanceof ClockedError && err.status === 429;
 }
 
 export function hasApiKey(): boolean {
@@ -49,7 +68,21 @@ async function postOnce<T>(
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
-    throw new ClockedError(`http_${res.status}`, `${endpoint} returned HTTP ${res.status}`, res.status, detail.slice(0, 500));
+    const retryAfterHeader = res.headers.get("retry-after");
+    let retryAfterMs: number | undefined;
+    if (res.status === 429 && retryAfterHeader) {
+      const seconds = Number(retryAfterHeader);
+      if (Number.isFinite(seconds) && seconds >= 0) {
+        retryAfterMs = Math.min(seconds * 1000, 10_000);
+      }
+    }
+    throw new ClockedError(
+      `http_${res.status}`,
+      `${endpoint} returned HTTP ${res.status}`,
+      res.status,
+      detail.slice(0, 500),
+      retryAfterMs,
+    );
   }
   return (await res.json()) as T;
 }
@@ -70,28 +103,37 @@ export interface ClockedCall<T> {
 }
 
 /**
- * POST with one retry on network errors or 5xx. The idempotency key is
- * generated once per logical request and reused verbatim on the retry,
- * so a timeout cannot double-charge or double-run.
+ * POST with bounded retry on 429, 5xx, and network errors, per the platform's
+ * limits guidance ("wait and retry; do not increase parallelism"). The
+ * idempotency key is generated once per logical request and reused verbatim
+ * on every retry, so a retry cannot double-charge or double-run. Backoff is
+ * exponential with jitter, capped, and honors a server Retry-After hint;
+ * after MAX_ATTEMPTS the error is thrown and the workflow fails closed.
  */
+const MAX_ATTEMPTS = 3;
+const BASE_BACKOFF_MS = [800, 2000];
+const BACKOFF_CAP_MS = 8000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 async function callClocked<T>(endpoint: string, body: unknown): Promise<ClockedCall<T>> {
   const idempotencyKey = crypto.randomUUID();
   const startedAt = Date.now();
   let attempts = 0;
-  const attempt = () => {
+  while (true) {
     attempts += 1;
-    return postOnce<T>(endpoint, body, idempotencyKey);
-  };
-  try {
-    const data = await attempt();
-    return { data, idempotencyKey, latencyMs: Date.now() - startedAt, attempts };
-  } catch (err) {
-    const retryable =
-      err instanceof ClockedError ? err.status >= 500 : true; // network/timeout errors
-    if (!retryable) throw err;
-    await new Promise((r) => setTimeout(r, 2000));
-    const data = await attempt();
-    return { data, idempotencyKey, latencyMs: Date.now() - startedAt, attempts };
+    try {
+      const data = await postOnce<T>(endpoint, body, idempotencyKey);
+      return { data, idempotencyKey, latencyMs: Date.now() - startedAt, attempts };
+    } catch (err) {
+      if (!isRetryable(err) || attempts >= MAX_ATTEMPTS) throw err;
+      const hint = err instanceof ClockedError ? err.retryAfterMs : undefined;
+      const base = hint ?? BASE_BACKOFF_MS[Math.min(attempts - 1, BASE_BACKOFF_MS.length - 1)];
+      const jittered = base * (0.8 + Math.random() * 0.4); // ±20% jitter
+      await sleep(Math.min(jittered, BACKOFF_CAP_MS));
+    }
   }
 }
 

@@ -2,13 +2,14 @@
 
 import type { TriageStateInfo } from "@/lib/analysis";
 import { TRIAGE_META } from "@/lib/display";
-import { CheckCircle2, AlertTriangle, FileQuestion, ShieldAlert } from "lucide-react";
+import { CheckCircle2, AlertTriangle, FileQuestion, ShieldAlert, Hourglass } from "lucide-react";
 
 const ICONS: Record<string, React.ReactNode> = {
   ready_for_review: <CheckCircle2 className="h-5 w-5 text-emerald-700" aria-hidden="true" />,
   conflict_needs_decision: <AlertTriangle className="h-5 w-5 text-amber-600" aria-hidden="true" />,
   missing_evidence: <FileQuestion className="h-5 w-5 text-stone-600" aria-hidden="true" />,
   review_required: <ShieldAlert className="h-5 w-5 text-slate-600" aria-hidden="true" />,
+  analysis_incomplete: <Hourglass className="h-5 w-5 text-sky-700" aria-hidden="true" />,
 };
 
 export function TriageBanner({ triage }: { triage: TriageStateInfo }) {

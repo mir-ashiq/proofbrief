@@ -150,6 +150,42 @@ The Markdown builder moved from the client component (`ExportBar.tsx`) into a pu
 
 ---
 
+## Run 5 — 2026-11-07, 5:44–5:45 PM IST (12:14 UTC)
+
+Full five-case live run after the hardening changes (relevance gate, runtime validation, retry/backoff, concurrency guard), all through `POST /api/analyze`; model `clocked-1.0` on every call, no retries needed, no 429s. Outputs saved to `tool-results/run5-*.json`.
+
+### All five states, including the new relevance gate
+
+| Case | grounded | answers_question | claim verdicts | compare | triage |
+| --- | --- | --- | --- | --- | --- |
+| supported | 1.00 | 0.995 | supported ×2 | overlapping | ready_for_review |
+| conflict | 0.61 | 0.995 | contradicted, supported | conflicting (pair 0) | conflict_needs_decision |
+| missing | 0.00 | 0.988 | not_stated ×2 | overlapping | missing_evidence |
+| scope-trap | 1.00 | 0.995 | supported ×2 | unrelated | ready_for_review |
+| wrong-question | 1.00 | **0.006** | supported ×2 | overlapping | **review_required** |
+
+### New case 5 — Accurate but off-topic (`wrong-question`)
+
+The exact edge the hardening addresses: every claim is grounded (grounded 1.00, both claims `supported`), the documents agree (overlapping, no conflict), and yet Verify scored the draft's relevance to the customer's question at **0.006** — the draft talks about access permissions and transport encryption while the customer asked about audit-log retention. Before this change the triage would have said "ready for human review"; now it returns `review_required` with the reason: "Verify's answers_question score is 0.01 (below 0.5): the draft's claims may be grounded in the sources, but the draft may not answer the customer's actual question. A human must decide whether the reply should be rewritten." Grounding and relevance are separate signals, and the state machine now uses both.
+
+### Concurrency guard
+
+Two simultaneous `/api/analyze` requests (supported + conflict): the first ran to completion (`ready_for_review`), the second was rejected immediately with HTTP 429 `busy` — "Another evidence check is still running — this demo runs one analysis at a time to stay inside Clocked's concurrency limits… This is not a source conflict." One analysis fires the three core calls in parallel; two overlapping analyses would trip the platform's build-tier limit of 4 concurrent requests (observed once as a Rerank 429 during concurrent rechecks earlier on 2026-11-07).
+
+### What changed (hardening round)
+
+1. **Relevance gate** (`src/lib/analysis.ts`): Verify's `answers_question` (0–1, returned when a question is supplied) now gates the triage below 0.5 — the platform's own default threshold convention. A missing score fails closed the same way. A source conflict still takes the headline state; the gate cannot mask one.
+2. **Runtime validation, fail closed** (`src/lib/validate.ts`, zod): every endpoint response is checked against the documented shape — verdict/action/relation enum allowlists, 0–1 scores, integer offsets, end ≥ start. Anything unexpected makes that endpoint not-ok with code `invalid_response`, and the review state can never be "ready" from an ununderstood output. A Rerank `use` result that joins to no registry passage (unknown id, out-of-range index) no longer counts as a source basis.
+3. **analysis_incomplete state**: retryable failures (429, 5xx, network) return a distinct "Analysis incomplete — retry later" state, explicitly labeled "not a source conflict and not a verdict"; non-retryable 4xx and validation failures stay `review_required`.
+4. **Bounded 429 backoff** (`src/lib/clocked.ts`): up to 3 attempts per logical request, exponential backoff with ±20% jitter (800 ms / 2 s base, 8 s cap), honoring a server `Retry-After` hint, idempotency key reused verbatim — matching the platform's limits guidance (wait and retry, never add parallelism).
+5. **Concurrency guard** (`src/app/api/analyze/route.ts`): one analysis at a time per instance plus a 4 s per-IP cooldown; over the cap the route answers 429 `busy` so the client retries. Module state is per-instance on serverless (documented limitation; a durable cap needs shared storage).
+6. **Export/UI offsets honesty**: an expanded heading-only extraction now keeps its character offsets beside the raw-extraction note only — never next to the full section text — in the Markdown export and both cards, so the offsets cannot be misread as spanning the whole section.
+7. **Enrichment labeling**: a supported claim without a Verify evidence quote leads with "No direct Verify evidence was returned for this claim" before the Rerank closest-passage match, labeled "enrichment, not proof" (UI and export).
+
+Verified by `bun scripts/check-hardening.ts` (35 offline checks: gate, fail-closed validation, incomplete-state mapping, orphan passages, export offsets), the existing two offline suites (still green), a clean `bunx tsc --noEmit`, clean `eslint .`, and a production build with the TypeScript bypass removed. No endpoint result was altered, cached, or fabricated.
+
+---
+
 ## Run metadata template
 
 ```
