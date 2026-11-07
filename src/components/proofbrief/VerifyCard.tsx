@@ -83,6 +83,40 @@ export function VerifyCard({ verify, docTitles }: { verify: AnalysisResult["veri
                   requested; no passage is invented when one is absent.
                 </p>
               )}
+              {c.verdict === "not_stated" && c.closest && c.closest.length > 0 && (
+                <div className="mt-2 rounded-md border border-amber-200 bg-amber-50/60 p-2.5">
+                  <p className="mb-1.5 text-xs font-semibold text-amber-900">
+                    Nearest sources for this claim (Clocked Rerank) — what the documents do say:
+                  </p>
+                  <ul className="space-y-1.5">
+                    {c.closest.map((r, j) => (
+                      <li
+                        key={r.passage?.id ?? j}
+                        className="text-xs leading-relaxed text-foreground/85"
+                      >
+                        <span className="font-mono text-muted-foreground">{r.passage?.id ?? r.index}</span>{" "}
+                        <span className="font-medium">
+                          {r.action}
+                          {r.reason ? ` (${r.reason.replace(/_/g, " ")})` : ""}
+                        </span>
+                        {r.passage && (
+                          <>
+                            {" — “"}
+                            {r.passage.text.length > 170
+                              ? r.passage.text.slice(0, 170) + "…"
+                              : r.passage.text}
+                            {"”"}
+                          </>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-1.5 text-[10px] text-muted-foreground">
+                    Enrichment only: these passages did not establish the claim. They are the closest
+                    the supplied sources come to it, so a reviewer can see the gap.
+                  </p>
+                </div>
+              )}
             </article>
           );
         })}

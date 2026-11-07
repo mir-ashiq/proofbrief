@@ -1,7 +1,7 @@
 // ProofBrief — Rerank results: passage shortlist joined back to the registry.
 
 import type { AnalysisResult } from "@/lib/analysis";
-import { rerankActionMeta, formatProb } from "@/lib/display";
+import { rerankActionMeta } from "@/lib/display";
 import { ScoreBar } from "./ScoreBar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -78,7 +78,7 @@ export function RerankCard({ rerank }: { rerank: AnalysisResult["rerank"] }) {
         )}
         <p className="text-xs text-muted-foreground">
           relevance_score: probability this passage answers the question · document_score: probability
-          the answer is somewhere in its document. {formatProb(undefined) === "—" ? "" : ""}
+          the answer is somewhere in its document.
         </p>
       </CardContent>
     </Card>

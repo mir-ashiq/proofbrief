@@ -38,6 +38,12 @@ function buildMarkdown(demoCase: DemoCase, result: AnalysisResult): string {
     } else {
       lines.push(`Evidence: none returned (evidence is optional even when requested)`);
     }
+    if (c.verdict === "not_stated" && c.closest && c.closest.length > 0) {
+      lines.push(`Nearest sources (Clocked Rerank, enrichment only — these did not establish the claim):`);
+      c.closest.forEach((r) => {
+        lines.push(`  - \`${r.passage?.id ?? r.index}\` ${r.action}${r.reason ? ` (${r.reason})` : ""} — “${(r.passage?.text ?? "").slice(0, 160)}”`);
+      });
+    }
   });
   lines.push("");
   lines.push(`## Source cross-check (Clocked Compare)`);
@@ -54,6 +60,22 @@ function buildMarkdown(demoCase: DemoCase, result: AnalysisResult): string {
   lines.push(`## Passage shortlist (Clocked Rerank)`);
   result.rerank.results.forEach((r) => {
     lines.push(`- \`${r.passage?.id ?? r.index}\` ${r.action}${r.reason ? ` (${r.reason})` : ""} — relevance ${(r.relevance_score * 100).toFixed(0)}%`);
+  });
+  lines.push("");
+  lines.push(`## Endpoint trace (live Clocked calls)`);
+  result.trace.forEach((t) => {
+    const bits = [
+      t.endpoint,
+      t.latencyMs !== undefined ? `${t.latencyMs} ms` : undefined,
+      t.model,
+      t.inputTokens !== undefined ? `${t.inputTokens} in-tokens` : undefined,
+      t.attempts !== undefined && t.attempts > 1
+        ? `${t.attempts} attempts (same idempotency key)`
+        : undefined,
+    ].filter(Boolean);
+    lines.push(
+      `- ${t.step}${t.ok ? "" : " — FAILED"} — ${bits.join(" · ")}${t.error ? ` (${t.error.code}: ${t.error.message})` : ""}`,
+    );
   });
   lines.push("");
   lines.push(`---`);

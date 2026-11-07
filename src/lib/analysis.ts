@@ -28,8 +28,34 @@ export const COMPARE_INSTRUCTIONS =
 
 // ---- Analysis result (what the API route returns to the UI) ----
 
+/**
+ * One live Clocked request made during a run, as shown in the endpoint trace.
+ * Enrichment lookups (nearest sources for a claim) are marked in `step`.
+ */
+export interface TraceEntry {
+  step: string;
+  endpoint: string;
+  purpose: string;
+  ok: boolean;
+  latencyMs?: number;
+  model?: string;
+  inputTokens?: number;
+  idempotencyKeyPrefix?: string;
+  attempts?: number;
+  error?: { code: string; message: string };
+}
+
 export interface JoinedRerankResult extends RerankResult {
   passage?: PassageEntry;
+}
+
+/**
+ * A Verify claim enriched with nearest-source passages for not_stated claims.
+ * `closest` is display-only enrichment from Rerank; it never replaces the
+ * Verify verdict and never changes the review state.
+ */
+export interface EnrichedClaim extends VerifyClaim {
+  closest?: JoinedRerankResult[];
 }
 
 export interface TriageStateInfo {
@@ -45,6 +71,7 @@ export interface AnalysisResult {
   caseId: string;
   ranAt: string;
   triage: TriageStateInfo;
+  trace: TraceEntry[];
   rerank: {
     ok: boolean;
     error?: { code: string; message: string };
@@ -57,7 +84,7 @@ export interface AnalysisResult {
     model?: string;
     grounded?: number;
     threshold?: number;
-    claims: VerifyClaim[];
+    claims: EnrichedClaim[];
     answers_question?: number;
   };
   compare: {
@@ -106,9 +133,9 @@ export function computeTriage(input: {
   }
 
   const useCount = input.rerankResults.filter((r) => r.action === "use").length;
-  if (useCount === 0) {
+  const noUsablePassage = useCount === 0;
+  if (noUsablePassage) {
     reasons.push("Rerank marked no passage as usable for this question, so there is no source basis to check the draft against.");
-    return { state: "missing_evidence", reasons };
   }
 
   const conflicts: string[] = [];
@@ -136,7 +163,7 @@ export function computeTriage(input: {
   for (const c of notStated) {
     reasons.push(`No source establishes the claim: "${c.claim.slice(0, 120)}${c.claim.length > 120 ? "…" : ""}"`);
   }
-  if (notStated.length > 0) {
+  if (notStated.length > 0 || noUsablePassage) {
     return { state: "missing_evidence", reasons };
   }
 

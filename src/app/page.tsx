@@ -9,6 +9,7 @@ import { CASES, getCase } from "@/lib/cases";
 import type { AnalysisResult } from "@/lib/analysis";
 import { CaseSelector } from "@/components/proofbrief/CaseSelector";
 import { TriageBanner } from "@/components/proofbrief/TriageBanner";
+import { TraceCard } from "@/components/proofbrief/TraceCard";
 import { RerankCard } from "@/components/proofbrief/RerankCard";
 import { VerifyCard } from "@/components/proofbrief/VerifyCard";
 import { CompareCard } from "@/components/proofbrief/CompareCard";
@@ -203,7 +204,7 @@ export default function Home() {
               <Card>
                 <CardContent className="space-y-3 p-6">
                   <p className="text-sm font-medium text-foreground">
-                    Calling Rerank, Verify, and Compare…
+                    Calling the live Clocked endpoints: Rerank, Verify, Compare…
                   </p>
                   <Skeleton className="h-4 w-3/4" />
                   <Skeleton className="h-20 w-full" />
@@ -218,6 +219,7 @@ export default function Home() {
             {!loading && result && (
               <>
                 <TriageBanner triage={result.triage} />
+                <TraceCard trace={result.trace} />
                 <VerifyCard verify={result.verify} docTitles={docTitles} />
                 <CompareCard compare={result.compare} docTitles={docTitles} />
                 <RerankCard rerank={result.rerank} />

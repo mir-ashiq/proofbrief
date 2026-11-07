@@ -55,20 +55,43 @@ async function postOnce<T>(
 }
 
 /**
+ * A completed logical request: the endpoint result plus call metadata for
+ * the on-screen endpoint trace. The idempotency key is not a credential,
+ * but only its first 8 characters are ever surfaced.
+ */
+export interface ClockedCall<T> {
+  data: T;
+  /** Idempotency key for this logical request; reused verbatim on retry. */
+  idempotencyKey: string;
+  /** Wall-clock latency of the whole logical request, including retry backoff. */
+  latencyMs: number;
+  /** HTTP attempts made (1 unless a retry happened). */
+  attempts: number;
+}
+
+/**
  * POST with one retry on network errors or 5xx. The idempotency key is
  * generated once per logical request and reused verbatim on the retry,
  * so a timeout cannot double-charge or double-run.
  */
-async function callClocked<T>(endpoint: string, body: unknown): Promise<T> {
+async function callClocked<T>(endpoint: string, body: unknown): Promise<ClockedCall<T>> {
   const idempotencyKey = crypto.randomUUID();
+  const startedAt = Date.now();
+  let attempts = 0;
+  const attempt = () => {
+    attempts += 1;
+    return postOnce<T>(endpoint, body, idempotencyKey);
+  };
   try {
-    return await postOnce<T>(endpoint, body, idempotencyKey);
+    const data = await attempt();
+    return { data, idempotencyKey, latencyMs: Date.now() - startedAt, attempts };
   } catch (err) {
     const retryable =
       err instanceof ClockedError ? err.status >= 500 : true; // network/timeout errors
     if (!retryable) throw err;
     await new Promise((r) => setTimeout(r, 2000));
-    return await postOnce<T>(endpoint, body, idempotencyKey);
+    const data = await attempt();
+    return { data, idempotencyKey, latencyMs: Date.now() - startedAt, attempts };
   }
 }
 
@@ -152,7 +175,8 @@ export function rerank(payload: {
   documents: { id: string; text: string; title: string; metadata?: Record<string, string> }[];
   context?: unknown;
   instructions?: string;
-}): Promise<RerankResponse> {
+  top_n?: number;
+}): Promise<ClockedCall<RerankResponse>> {
   return callClocked<RerankResponse>("rerank", payload);
 }
 
@@ -162,7 +186,7 @@ export function verify(payload: {
   question?: string;
   instructions?: string;
   evidence?: "all" | "flagged" | "none";
-}): Promise<VerifyResponse> {
+}): Promise<ClockedCall<VerifyResponse>> {
   return callClocked<VerifyResponse>("grounding", payload);
 }
 
@@ -171,6 +195,6 @@ export function compare(payload: {
   instructions?: string;
   kinds?: boolean;
   evidence?: "all" | "flagged" | "none";
-}): Promise<CompareResponse> {
+}): Promise<ClockedCall<CompareResponse>> {
   return callClocked<CompareResponse>("compare", payload);
 }
