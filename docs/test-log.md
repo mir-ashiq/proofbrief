@@ -67,6 +67,40 @@ Trace: Rerank 373 ms · Verify 420 ms · Compare 463 ms.
 
 ---
 
+## Run 2 — 2026-11-07, ~2:56 PM IST (09:26 UTC)
+
+Run immediately after two evidence-display fixes (listed at the bottom). All four cases through `POST /api/analyze` with a live `CLOCKED_API_KEY`; model on every call `clocked-1.0`. Every expectation from Run 1 held, and all four triage states are identical to Run 1.
+
+### Case 1 — Fully supported (`supported`)
+
+grounded 0.9969 · answers question 0.99 · Compare `overlapping` (related 0.9982, roll-up `clean`) · triage `ready_for_review`. Rerank: `doc-dhs13-s2` and `doc-sp21-s2` `use` at 99% each; the other four passages skipped. Both claims supported with evidence quotes from doc-sp21. Trace: 615/755/705 ms. **No change from Run 1.**
+
+### Case 2 — True conflict (`conflict`)
+
+grounded 0.6063 · Compare `conflicting` (related 0.9788; one finding, kind `value`) · triage `conflict_needs_decision`. Claim #1 (12 months) `contradicted` at 0.9456 with the doc-sp21 evidence quote; claim #2 supported. Trace: 358/413/514 ms.
+
+**Fix 1 observed:** the contradicted claim now also shows the *opposing* passage joined from the flagged pair — doc-rs26: "Audit log records are retained for 24 months from the date of record, then deleted." — attributed to the Compare cross-check and linked to the pair card. The pair finding's a-side quote itself came back as only the heading "## Audit log retention" (chars 186–208); the card now offers the surrounding section from the source document as context, so a heading-only extraction is no longer mistaken for the whole evidence.
+
+### Case 3 — Missing evidence (`missing`)
+
+grounded 0.0019 · Compare `overlapping` (related 0.9982, `clean`) · triage `missing_evidence`. All six passages skipped at question level; both claims `not_stated`; both nearest-source lookups returned all-skip top-3s. Trace: 351/427/304/369/325 ms. **No change from Run 1.**
+
+### Case 4 — Different-scope numbers (`scope-trap`)
+
+grounded 0.9967 · Compare `unrelated` (related 0.0054, roll-up `clean`) · triage `ready_for_review`. Claim #1 supported with evidence; claim #2 (7-year backup archives) supported **without** an evidence quote. Trace: 360/413/637/315 ms — four live calls, the fourth being the new lookup.
+
+**Fix 2 observed:** the supported-but-unevidenced claim now gets a nearest-source lookup: `doc-brs20-s1` (backup retention) returned `use` at 99% relevance. It renders under "No evidence quote was returned. Nearest sources by relevance (Clocked Rerank)", explicitly labeled as not Verify evidence; the dashed no-evidence note stays.
+
+### What changed between runs (display layer only)
+
+1. Compare finding quotes — verbatim extractions that can be as short as a section heading — are now displayed with the surrounding source section, located by character offsets in the passage registry.
+2. A claim Verify contradicts is cross-linked to the opposing passage of the flagged Compare pair. The join uses only live outputs (the claim's evidence document and the pair's own findings), is attributed to Compare, and links to the pair card.
+3. Nearest-source Rerank lookups now also run for counted claims that return no evidence quote (previously only `not_stated` claims), capped at four per run and executed in waves of at most three to respect the four-concurrent-request limit.
+
+No endpoint result was altered, cached, or fabricated; every verdict, score, quote, and relation above is exactly what the endpoints returned.
+
+---
+
 ## Run metadata template
 
 ```
