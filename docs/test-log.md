@@ -186,6 +186,36 @@ Verified by `bun scripts/check-hardening.ts` (35 offline checks: gate, fail-clos
 
 ---
 
+## Run 6 — 2026-11-07, 7:05–7:08 PM IST (13:35 UTC)
+
+Post-deploy smoke run for the run-time budget fix (commit `32d4c4e`, deployed and confirmed via Vercel's commit status: "Deployment has completed"). Five cases run sequentially through the deployed `POST /api/analyze` at proofbrief.vercel.app, once each; model `clocked-1.0` on every call, single attempt everywhere (no retries, no 429s), whole-run wall times 531–1650 ms. Outputs saved to `tool-results/run6-*.json`.
+
+### What changed (time budget)
+
+`maxDuration` is 60 s, but a single logical Clocked request could wait up to 120 s per attempt across 3 attempts, and the optional nearest-source lookups added up to two more waves — a worst case of minutes in which the platform would terminate the function mid-run and the reviewer would get no review state at all. Every run now enforces a hard 50 s wall-clock deadline (10 s margin under `maxDuration`):
+
+1. **Deadline-capped client** (`src/lib/clocked.ts`): a new `CallOptions.deadline` caps each attempt's timeout to `min(120 s, time left)` and starts a retry only when its backoff still leaves room for a meaningful attempt (≥ 2 s). Past the deadline the request fails as `deadline_exceeded` — a retry-later condition, like 429/5xx. Calls without a deadline keep the previous behavior; the idempotency key is still generated once and reused verbatim across retries.
+2. **Route budget and enrichment gating** (`src/app/api/analyze/route.ts`): the three core calls share the run deadline; optional nearest-source lookups are skipped entirely when any core call failed or the remaining budget is under 10 s. Enrichment stays display-only, so skipping it never changes the review state.
+3. **Fail-closed mapping** (`src/lib/analysis.ts`, `src/lib/display.ts`): `deadline_exceeded` maps to `analysis_incomplete` ("retry later", explicitly not a source conflict), never `ready_for_review` and never `conflict_needs_decision` — even when a conflicting pair was also returned.
+
+Worst case per run is now bounded at ~50 s + serialization regardless of how slow or throttled the endpoints are. The relevance gate, runtime validation, idempotency, 429 handling, concurrency guard, five cases, and both exports are unchanged.
+
+### All five cases on the new deployment
+
+| Case | grounded | answers_question | claim verdicts | compare | triage | run time |
+| --- | --- | --- | --- | --- | --- | --- |
+| supported | 0.997 | 0.995 | supported ×2 | overlapping | ready_for_review | 1650 ms |
+| conflict | 0.606 | 0.995 | contradicted, supported | conflicting (pair 0) | conflict_needs_decision | 1064 ms |
+| missing | 0.002 | 0.988 | not_stated ×2 | overlapping | missing_evidence | 882 ms |
+| scope-trap | 0.997 | 0.995 | supported ×2 | unrelated | ready_for_review | 779 ms |
+| wrong-question | 0.997 | **0.006** | supported ×2 | overlapping | **review_required** | 531 ms |
+
+Trace shapes unchanged: `missing` ran its two nearest-source lookups (5 trace entries), `scope-trap` its one (4 entries), the others 3 core calls each; every lookup is still labeled enrichment-only. Both exports were checked against each live result: the Markdown packet (same `buildMarkdown` the export button uses) contains every section with this run's state, and the raw JSON export round-trips case + full result.
+
+Verified by `bun scripts/check-time-budget.ts` (30 new offline checks: mocked deadline expiry including a hanging endpoint, retryable 429/timeout paths, idempotency-key reuse, triage mapping including deadline-vs-conflict precedence, and the ≤ 50 s budget-with-margin invariant), the existing three offline suites (still green), a clean `bunx tsc --noEmit`, clean `eslint .`, a production build with type checking, the pushed commit's Vercel deployment status, and this five-case live run. No endpoint result was altered, cached, or fabricated.
+
+---
+
 ## Run metadata template
 
 ```

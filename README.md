@@ -103,6 +103,7 @@ scripts/
   check-display-fixes.ts       offline checks vs saved live outputs (quote resolution, opposing side)
   check-export-fix.ts          offline checks for the exported packet
   check-hardening.ts           offline checks: relevance gate, validation, incomplete state, offsets
+  check-time-budget.ts         offline checks: deadline expiry, retryable 429/timeout, run-budget invariant
 ```
 
 ## Demo script (60–90 s)
@@ -148,6 +149,6 @@ Any Node 20.9+ host works. On Vercel:
 2. Set the environment variable `CLOCKED_API_KEY` (Project → Settings → Environment Variables) for Production and Preview.
 3. Deploy. `next build` runs with TypeScript checking enabled (no bypass); there is no Prisma step — the app uses no database.
 
-Local checks before shipping: `bun run lint` · `bunx tsc --noEmit` · `bun run build` · the three offline suites in `scripts/` (`check-display-fixes.ts`, `check-export-fix.ts`, `check-hardening.ts`).
+Local checks before shipping: `bun run lint` · `bunx tsc --noEmit` · `bun run build` · the four offline suites in `scripts/` (`check-display-fixes.ts`, `check-export-fix.ts`, `check-hardening.ts`, `check-time-budget.ts`).
 
 Keep the demo and this repository accessible through **November 18, 2026**.
