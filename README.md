@@ -119,7 +119,7 @@ scripts/
 
 ## Test log
 
-See [`docs/test-log.md`](docs/test-log.md). Expected outcomes are written per case per endpoint; **observed outcomes are recorded from real runs and never hardcoded** — including the different-scope trap case, where either a clean pass or a flagged pair routed to human resolution is an acceptable, documented result. Five live runs are recorded through 2026-11-07, the latest covering all five cases including the relevance gate (off-topic draft: grounded 1.00, answers_question 0.006, review_required).
+See [`docs/test-log.md`](docs/test-log.md). Expected outcomes are written per case per endpoint; **observed outcomes are recorded from real runs and never hardcoded** — including the different-scope trap case, where either a clean pass or a flagged pair routed to human resolution is an acceptable, documented result. Six live runs are recorded through 2026-11-07, the latest a post-deploy smoke of the reference-integrity build on the deployed commit `4628f8c`: all five documented states reproduced with the new reference gates silent on real endpoint output (off-topic draft: grounded 1.00, answers_question 0.006, review_required).
 
 ## Known limitations
 

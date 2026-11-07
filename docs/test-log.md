@@ -1,4 +1,4 @@
-# ProofBrief — four-case test log
+# ProofBrief — five-case test log
 
 Expected outcomes below were written **before** running. Observed outcomes are recorded from real runs against the live Clocked endpoints and are **never hardcoded or edited to match expectations**. Model verdicts can vary between runs; that is a property of the platform, and this log exists to show the experiment honestly.
 
@@ -212,7 +212,7 @@ Worst case per run is now bounded at ~50 s + serialization regardless of how slo
 
 Trace shapes unchanged: `missing` ran its two nearest-source lookups (5 trace entries), `scope-trap` its one (4 entries), the others 3 core calls each; every lookup is still labeled enrichment-only. Both exports were checked against each live result: the Markdown packet (same `buildMarkdown` the export button uses) contains every section with this run's state, and the raw JSON export round-trips case + full result.
 
-Verified by `bun scripts/check-time-budget.ts` (30 new offline checks: mocked deadline expiry including a hanging endpoint, retryable 429/timeout paths, idempotency-key reuse, triage mapping including deadline-vs-conflict precedence, and the ≤ 50 s budget-with-margin invariant), the existing three offline suites (still green), a clean `bunx tsc --noEmit`, clean `eslint .`, a production build with type checking, the pushed commit's Vercel deployment status, and this five-case live run. No endpoint result was altered, cached, or fabricated.
+Verified by `bun scripts/check-time-budget.ts` (29 new offline checks: mocked deadline expiry including a hanging endpoint, retryable 429/timeout paths, idempotency-key reuse, triage mapping including deadline-vs-conflict precedence, and the ≤ 50 s budget-with-margin invariant), the existing three offline suites (still green), a clean `bunx tsc --noEmit`, clean `eslint .`, a production build with type checking, the pushed commit's Vercel deployment status, and this five-case live run. No endpoint result was altered, cached, or fabricated.
 
 ---
 
@@ -231,9 +231,29 @@ The time budget, relevance gate, Zod shape validation, idempotency keys, 429 han
 
 ### Observed outcomes
 
-No live run in this round (the patch was verified offline; deployment pending at the time of writing). Instead, all five saved live results (`tool-results/run6-*.json`) were replayed through the new composition — strict re-join of the Rerank results, reference check of every evidence item, pair, and finding, recomputed triage — and reproduce their documented states exactly with zero integrity issues: `supported` → ready_for_review, `conflict` → conflict_needs_decision, `missing` → missing_evidence, `scope-trap` → ready_for_review, `wrong-question` → review_required. Real endpoint output does not trip the new gates.
+No live run in this round (the patch was verified offline; deployment pending at the time of writing). Instead, all five saved live results (`tool-results/run6-*.json`) were replayed through the new composition — strict re-join of the Rerank results, reference check of every evidence item, pair, and finding, recomputed triage — and reproduce their documented states exactly with zero integrity issues: `supported` → ready_for_review, `conflict` → conflict_needs_decision, `missing` → missing_evidence, `scope-trap` → ready_for_review, `wrong-question` → review_required. Real endpoint output does not trip the new gates. **The post-deploy live run of this build is recorded as Run 8 below.**
 
-Verified by `bun scripts/check-source-integrity.ts` (55 offline checks: unknown rerank id with a valid index never joins elsewhere; unjoinable `use` results fail closed; withheld evidence and dropped pairs/findings never allow ready; conflict-index remap; export mirroring; transport-failure precedence; the five-run replay above), the four existing offline suites (still green, with check-hardening §4 updated to the strengthened `review_required` semantics), a clean `bunx tsc --noEmit`, clean `eslint .`, and a production build with type checking. No endpoint result was altered, cached, or fabricated.
+Verified by `bun scripts/check-source-integrity.ts` (54 offline checks: unknown rerank id with a valid index never joins elsewhere; unjoinable `use` results fail closed; withheld evidence and dropped pairs/findings never allow ready; conflict-index remap; export mirroring; transport-failure precedence; the five-run replay above), the four existing offline suites (still green, with check-hardening §4 updated to the strengthened `review_required` semantics), a clean `bunx tsc --noEmit`, clean `eslint .`, and a production build with type checking. No endpoint result was altered, cached, or fabricated.
+
+---
+
+## Run 8 — 2026-11-07, ~10:00 PM IST (16:30 UTC) — post-deploy smoke of the reference-integrity build
+
+Commit `4628f8c` (reference-integrity hardening) pushed and deployed: `origin/main` verified at `4628f8c`, and the commit's Vercel status on GitHub reports **success** (deployment `9XjMqbguAmsnDSQ4QrhkwAQAwSFP`). Five cases, sequentially, through the deployed `POST /api/analyze` at proofbrief.vercel.app — the same code path the UI uses; model `clocked-1.0` on every call, single attempt everywhere, no 429s, whole-run wall times 550–944 ms. Outputs saved to `tool-results/run8-*.json`.
+
+### All five cases on the deployed build
+
+| Case | grounded | answers_question | claim verdicts | compare | triage | run time |
+| --- | --- | --- | --- | --- | --- | --- |
+| supported | 0.997 | 0.995 | supported ×2 | overlapping | ready_for_review | 550 ms |
+| conflict | 0.606 | 0.995 | contradicted, supported | conflicting (pair 0) | conflict_needs_decision | 832 ms |
+| missing | 0.002 | 0.988 | not_stated ×2 | overlapping | missing_evidence | 944 ms |
+| scope-trap | 0.997 | 0.995 | supported ×2 | unrelated | ready_for_review | 671 ms |
+| wrong-question | 0.997 | **0.006** | supported ×2 | overlapping | **review_required** | 771 ms |
+
+Trace shapes identical to Run 6: `missing` ran its two nearest-source lookups (5 trace entries), `scope-trap` its one (4 entries), the others the 3 core calls; every attempt 1. The new reference gates stayed silent on this real endpoint output — zero withheld evidence, zero integrity reasons, no unjoined `use` results. On well-formed output that silence is expected; the deployment identity comes from the pushed SHA and Vercel's commit status, this run confirms the deployed app reproduces every documented state with the gates active and not falsely triggering. Malformed references cannot be injected through the public route (it accepts a case id over the fixed synthetic documents only), so the fail-closed paths are covered by the 54 offline checks in `check-source-integrity.ts`; this live run is the no-false-positive half of that verification. Both exports were rebuilt from each live result with the same `buildMarkdown` the export button uses: every packet carries its run's review state and every claim, the conflict packet carries the opposing 24-month quote, and nothing is withheld anywhere.
+
+Note on suite counts: per-suite counts quoted in earlier entries were miscounted at writing and are corrected in place above (Run 6: 29, not 30; Run 7: 54, not 55 — both suites unchanged since those commits). Authoritative totals at this commit: `check-display-fixes` 20 · `check-export-fix` 17 · `check-hardening` 37 · `check-time-budget` 29 · `check-source-integrity` 54 — **157 offline checks**, all green alongside a clean `bunx tsc --noEmit`, clean `eslint .`, and a production build with type checking. No endpoint result was altered, cached, or fabricated.
 
 ---
 
