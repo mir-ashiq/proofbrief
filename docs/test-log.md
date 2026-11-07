@@ -134,6 +134,22 @@ Verified by `bun scripts/check-display-fixes.ts` (20 offline checks against the 
 
 ---
 
+## Run 4 — 2026-11-07, 4:46 PM IST (11:16 UTC)
+
+Single-case live rerun of the conflict case after the Markdown export fix, prompted by an external read-only check of the deployed app: the UI and the claim ledger resolved a heading-only Compare extraction to its full section, but the packet's "Source cross-check" section still printed the bare heading. Three live calls (Rerank, Verify, Compare; no claim-level lookups were needed — both claims returned evidence quotes this run); model `clocked-1.0` on every call. Outputs saved to `tool-results/run4-conflict.json`.
+
+### Case 2 — True conflict (`conflict`) — endpoint behavior unchanged
+
+Claim #1 (12 months) `contradicted` (supported 4% · contradicted 95% · not_stated 1%, evidence quote from doc-sp21) · Claim #2 (deletion) `supported` (94%) · Compare pair `doc-sp21 ↔ doc-rs26` `conflicting` (related 98%), one finding kind `value` · grounded 0.61 · answers_question 0.99 · triage `conflict_needs_decision`. The Compare a-side extraction was again the bare heading `## Audit log retention` (chars 186–208) — the endpoint reliably returns it, which is exactly what made the export gap visible.
+
+**Fix observed (export parity):** the exported packet's Source cross-check section now shows, on the doc-sp21 side, the full 12-month section — "Northwind retains customer audit logs for 12 months from the date of record. At the end of the retention period, audit logs are automatically and permanently deleted from all production and backup systems." — with the note `endpoint extraction was the section heading only ("## Audit log retention"); the full section is shown`, and on the doc-rs26 side the 24-month sentence with its leading heading line stripped. The claim ledger's opposing passage (doc-rs26, 24 months) and the wording-attribution note are unchanged.
+
+### What changed (export layer only)
+
+The Markdown builder moved from the client component (`ExportBar.tsx`) into a pure module `src/lib/export.ts`, and its Source cross-check section now resolves every conflict quote with the same `resolveQuote` used by the UI's compare card and the claim ledger: a heading-only extraction is exported as its full source section located by the endpoint's own offsets, and the raw extraction stays in the note. The JSON export is unchanged — it still dumps the raw endpoint record. Verified by `bun scripts/check-export-fix.ts` (15 offline checks against this run's saved outputs), by the live run above, and by a clean production build and typecheck. No endpoint result was altered, cached, or fabricated.
+
+---
+
 ## Run metadata template
 
 ```
